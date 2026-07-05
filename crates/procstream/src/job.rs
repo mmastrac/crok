@@ -216,12 +216,19 @@ impl Job {
     }
 
     /// Send `sig` to the tree. Only [`Signal::Kill`] does anything on Windows —
-    /// it terminates the Job (and with it every process) via kill-on-job-close.
-    /// Graceful signals are a no-op; escalate to `Kill`.
+    /// it terminates the Job (and with it every process). Graceful signals are
+    /// a no-op; escalate to `Kill`.
     pub fn signal(&self, sig: Signal) -> io::Result<()> {
         if let Signal::Kill = sig {
             self.inner.terminated.store(true, Ordering::Relaxed);
-            _ = self.inner.job.lock().unwrap().take();
+            if let Some(job) = self.inner.job.lock().unwrap().take() {
+                // Terminate the tree synchronously with a non-zero code, rather
+                // than leaning on kill-on-job-close when the handle drops. That
+                // path exits the processes with code 0, which reads as a clean
+                // success; an explicit code marks the kill on the exit status.
+                use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+                unsafe { TerminateJobObject(job.handle() as _, 1) };
+            }
         }
         Ok(())
     }

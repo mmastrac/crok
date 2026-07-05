@@ -17,7 +17,10 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 win32job = "2.0.3"
 tlhelp32 = "1"
-windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+] }
 
 [lib]
 name = "procstream"
