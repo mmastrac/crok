@@ -419,14 +419,19 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 30");
         let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+        let job = child.job().clone();
+
+        // A Job cannot reap, so the terminated leader lingers as a zombie in
+        // its own group until a Child owner waits on it (as clitest's main
+        // thread does). Reap on another thread so shutdown's liveness probe
+        // sees the group vanish and returns without burning the whole grace.
+        let reaper = std::thread::spawn(move || child.wait());
 
         let start = Instant::now();
-        child
-            .job()
-            .shutdown(Signal::Terminate, Duration::from_secs(10))
+        job.shutdown(Signal::Terminate, Duration::from_secs(10))
             .unwrap();
-        // The sleep dies to the SIGTERM, so the grace period is not consumed.
         assert!(start.elapsed() < Duration::from_secs(5));
-        assert!(!child.wait().unwrap().success());
+
+        assert!(!reaper.join().unwrap().unwrap().success());
     }
 }
