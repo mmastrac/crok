@@ -10,6 +10,7 @@
 use std::io;
 use std::process::{Command, ExitStatus};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -86,6 +87,8 @@ pub struct Job {
 struct JobInner {
     /// The process group id, which equals the leader child's pid.
     pgid: i32,
+    /// Set once we deliver a terminate or kill signal to the tree.
+    terminated: AtomicBool,
 }
 
 #[cfg(windows)]
@@ -93,6 +96,16 @@ struct JobInner {
     /// The Job object. Dropping it terminates the tree via kill-on-close, so it
     /// also serves as the on-demand kill.
     job: std::sync::Mutex<Option<win32job::Job>>,
+    /// Set once we terminate the tree.
+    terminated: AtomicBool,
+}
+
+impl Job {
+    /// Whether procstream has delivered a terminate or kill signal to this
+    /// tree.
+    pub fn terminated(&self) -> bool {
+        self.inner.terminated.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(unix)]
@@ -101,6 +114,7 @@ impl Job {
         Ok(Job {
             inner: Arc::new(JobInner {
                 pgid: child.id() as i32,
+                terminated: AtomicBool::new(false),
             }),
         })
     }
@@ -112,6 +126,9 @@ impl Job {
             Signal::Terminate => libc::SIGTERM,
             Signal::Kill => libc::SIGKILL,
         };
+        if matches!(sig, Signal::Terminate | Signal::Kill) {
+            self.inner.terminated.store(true, Ordering::Relaxed);
+        }
         // A negative pid targets the whole process group.
         let rc = unsafe { libc::kill(-(self.inner.pgid as libc::pid_t), os_sig) };
         if rc == 0 {
@@ -193,6 +210,7 @@ impl Job {
         Ok(Job {
             inner: Arc::new(JobInner {
                 job: std::sync::Mutex::new(Some(job)),
+                terminated: AtomicBool::new(false),
             }),
         })
     }
@@ -202,6 +220,7 @@ impl Job {
     /// Graceful signals are a no-op; escalate to `Kill`.
     pub fn signal(&self, sig: Signal) -> io::Result<()> {
         if let Signal::Kill = sig {
+            self.inner.terminated.store(true, Ordering::Relaxed);
             _ = self.inner.job.lock().unwrap().take();
         }
         Ok(())
@@ -241,6 +260,11 @@ impl<T> Child<T> {
     /// `self.job().signal(sig)`.
     pub fn signal(&self, sig: Signal) -> io::Result<()> {
         self.job.signal(sig)
+    }
+
+    /// Whether procstream terminated the tree. See [`Job::terminated`].
+    pub fn terminated(&self) -> bool {
+        self.job.terminated()
     }
 
     /// Take the captured output queue. Panics if called more than once.
@@ -412,6 +436,18 @@ mod tests {
         let start = Instant::now();
         assert!(child.wait().unwrap().success());
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn terminated_tracks_our_own_kill() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30");
+        let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+
+        assert!(!child.terminated());
+        child.signal(Signal::Kill).unwrap();
+        assert!(child.terminated());
+        child.wait().unwrap();
     }
 
     #[test]

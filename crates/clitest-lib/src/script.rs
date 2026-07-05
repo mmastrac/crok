@@ -875,13 +875,13 @@ pub enum CommandExit {
 impl CommandExit {
     pub fn matches(&self, status: CommandResult) -> bool {
         match (self, status) {
-            (CommandExit::Success, CommandResult::Exit(status)) => status.success(),
-            (CommandExit::Failure(code), CommandResult::Exit(status)) => {
+            (CommandExit::Success, CommandResult::Exit(status, _)) => status.success(),
+            (CommandExit::Failure(code), CommandResult::Exit(status, _)) => {
                 *code == status.code().unwrap_or(-1)
             }
             (CommandExit::Timeout, CommandResult::TimedOut) => true,
             (CommandExit::Any, _) => true,
-            (CommandExit::AnyFailure, CommandResult::Exit(status)) => !status.success(),
+            (CommandExit::AnyFailure, CommandResult::Exit(status, _)) => !status.success(),
             (CommandExit::AnyFailure, _) => true,
             _ => false,
         }

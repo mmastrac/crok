@@ -15,21 +15,43 @@ use crate::{
     script::{ScriptKillReceiver, ScriptKillSender, ScriptLocation},
 };
 
-#[derive(Copy, Clone, derive_more::Debug, derive_more::Display, PartialEq, Eq)]
+#[derive(Copy, Clone, derive_more::Debug, PartialEq, Eq)]
 pub enum CommandResult {
     #[debug("{_0:?}")]
-    #[display("{_0}")]
-    Exit(ExitStatus),
+    Exit(ExitStatus, bool),
     #[debug("timed out")]
-    #[display("timed out")]
     TimedOut,
 }
 
 impl CommandResult {
     pub fn success(&self) -> bool {
         match self {
-            CommandResult::Exit(status) => status.success(),
+            CommandResult::Exit(status, _) => status.success(),
             CommandResult::TimedOut => false,
+        }
+    }
+}
+
+impl std::fmt::Display for CommandResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandResult::Exit(status, killed) => {
+                if *killed {
+                    write!(f, "killed")?;
+                    // On Unix the status also names the signal that it gets.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        if status.signal().is_some() {
+                            write!(f, "; {status}")?;
+                        }
+                    }
+                    Ok(())
+                } else {
+                    write!(f, "{status}")
+                }
+            }
+            CommandResult::TimedOut => write!(f, "timed out"),
         }
     }
 }
@@ -194,9 +216,10 @@ impl CommandLine {
                     }
                 }
 
+                let status = child.wait()?;
                 Ok((
                     Lines::new(output_lines),
-                    CommandResult::Exit(child.wait()?),
+                    CommandResult::Exit(status, child.terminated()),
                 ))
             },
         )

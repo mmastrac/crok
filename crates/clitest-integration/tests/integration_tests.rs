@@ -159,9 +159,10 @@ fn munge_line(root: &str, tmp: &[&str], output: &mut String, line: &str) {
     // Windows/Unix differs here
     #[cfg(windows)]
     let line = line.replace("exit code", "exit status");
-    // Background processes don't get a signal report
+    // Windows kills the tree via the Job object, so there is no signal detail;
+    // both platforms still report "killed".
     #[cfg(windows)]
-    let line = line.replace(" (signal: 1 (SIGHUP))", "");
+    let line = line.replace("; signal: 15 (SIGTERM)", "");
 
     if line.contains("<ignore>") {
         output.push_str("<ignore>\n");
