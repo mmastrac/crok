@@ -25,7 +25,7 @@ serde = { workspace = true, features = ["derive", "rc"] }
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
 dirs.workspace = true
-signal-child.workspace = true
+procstream.workspace = true
 utf8-supported.workspace = true
 tempfile.workspace = true
 keepcalm.workspace = true
@@ -38,11 +38,6 @@ scattered-collect.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-win32job = "2.0.3"
-tlhelp32 = "1"
-windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
 
 [lib]
 name = "clitest_lib"

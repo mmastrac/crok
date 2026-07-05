@@ -1,0 +1,7 @@
+#!/usr/bin/env clitest --v0
+
+# The command closes stdout and stderr but keeps running. The hard timeout must
+# still fire rather than blocking forever on the now-silent child.
+$ exec >/dev/null 2>&1; sleep 10
+%TIMEOUT 100ms
+%EXIT timeout

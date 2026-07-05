@@ -189,20 +189,17 @@ dependencies = [
  "keepcalm",
  "linktime",
  "pretty_assertions",
+ "procstream",
  "scattered-collect",
  "serde",
  "shellish_parse",
- "signal-child",
  "tempfile",
  "termcolor",
  "termsize",
  "thiserror 2.0.18",
- "tlhelp32",
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "utf8-supported",
- "win32job",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -238,6 +235,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "980c2afde4af43d6a05c5be738f9eae595cff86dce1f38f88b95058a98c027f3"
 dependencies = [
  "crossterm",
+]
+
+[[package]]
+name = "crok"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "clitest-lib",
+ "dunce",
+ "serde_json",
+ "serde_yaml",
+ "termcolor",
+ "termimad",
+ "toml",
 ]
 
 [[package]]
@@ -874,6 +885,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "procstream"
+version = "0.7.0"
+dependencies = [
+ "libc",
+ "tlhelp32",
+ "vt-push-parser",
+ "win32job",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1076,12 +1098,6 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
-name = "signal-child"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3184fa464a0128cbcc353100ae752a848bc0067dd5715a50550f31570051150"
 
 [[package]]
 name = "signal-hook"

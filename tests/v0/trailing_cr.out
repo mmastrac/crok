@@ -1,0 +1,16 @@
+Running <root>/trailing_cr.cli ...
+
+printf 'done\r'
+---
+done
+---
+✅ OK
+
+printf 'a\r\nb\r\n'
+---
+a
+b
+---
+✅ OK
+
+<root>/trailing_cr.cli PASSED

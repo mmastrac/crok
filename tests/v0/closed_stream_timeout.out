@@ -1,0 +1,10 @@
+Running <root>/closed_stream_timeout.cli ...
+
+exec >/dev/null 2>&1; sleep 10
+---
+Process took too long!
+(no output)
+---
+✅ OK (timed out)
+
+<root>/closed_stream_timeout.cli PASSED

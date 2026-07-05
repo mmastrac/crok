@@ -1,0 +1,10 @@
+#!/usr/bin/env clitest --v0
+
+# A final line with no trailing newline but a trailing CR drops the CR to match.
+$ printf 'done\r'
+! done
+
+# CRLF endings still collapse to bare lines.
+$ printf 'a\r\nb\r\n'
+! a
+! b

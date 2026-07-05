@@ -1,0 +1,24 @@
+[package]
+name = "procstream"
+license = "MIT/Apache-2.0"
+version.workspace = true
+authors = ["Matt Mastracci <matthew@mastracci.com>"]
+edition = "2024"
+description = "Spawn background processes, capture their output as a stream of transformed chunks, and kill the whole process tree across platforms."
+repository = "https://github.com/mmastrac/clitest"
+readme = "README.md"
+
+[dependencies]
+vt-push-parser = "0.13"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2.0.3"
+tlhelp32 = "1"
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+
+[lib]
+name = "procstream"
+path = "src/lib.rs"

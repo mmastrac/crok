@@ -14,7 +14,7 @@ background
 ---
 (no output)
 ---
-✅ OK (signal: 1 (SIGHUP))
+✅ OK (signal: 15 (SIGTERM))
 
 (cleanup) removing <tmp> && cd <root>
 
