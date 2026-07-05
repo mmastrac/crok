@@ -5,13 +5,13 @@
 //! for each stream it is attached to, so one `Transform` can be reused across
 //! many spawns.
 //!
-//! A pipeline has two halves. The pre-stages ([`ByteFilter`]s — ANSI stripping,
+//! A pipeline has two halves. The pre-stages ([`ByteFilter`]s for ANSI stripping,
 //! `\r` overwrite collapse, UTF-8 sanitizing) are byte-to-byte and run in a fixed
 //! order regardless of builder call order: `ansi`, then `overwrite`, then `utf8`.
 //! The terminal stage is a [`Framer`], which turns the byte stream into items of
-//! its chosen `Item` type — that type is the transform's output type. `lines()`
-//! produces [`Line`]s; the default produces `Vec<u8>` byte runs; `frame()` lets
-//! you plug in any framer of your own.
+//! its chosen `Item` type, the transform's output type. `lines()` produces
+//! [`Line`]s, the default produces `Vec<u8>` byte runs, and `frame()` lets you
+//! plug in any framer of your own.
 
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ pub enum LineEnding {
     Eof,
 }
 
-/// A single framed line — the output type of the [`TransformBuilder::lines`]
+/// A single framed line, the output type of the [`TransformBuilder::lines`]
 /// framer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
@@ -133,7 +133,7 @@ impl ByteStage {
             ByteStage::Ansi(Ansi::Keep) => None,
             ByteStage::Ansi(mode) => Some(Box::new(AnsiFilter::new(*mode))),
             ByteStage::Overwrite(Overwrite::Passthrough) => None,
-            // CollapseBlock is not implemented yet; fall back to per-line collapse.
+            // CollapseBlock is not implemented yet, so fall back to per-line collapse.
             ByteStage::Overwrite(_) => Some(Box::new(CollapseLine::default())),
             ByteStage::Utf8(Utf8::Preserve) => None,
             ByteStage::Utf8(Utf8::Lossy) => Some(Box::new(Utf8Filter::default())),
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn pipeline_applies_fixed_order_and_types_line() {
         // A coloured progress bar: strip motion, collapse the rewrite, frame the
-        // line — the terminal framer sets the output type to Line.
+        // line. The terminal framer sets the output type to Line.
         let t = Transform::builder()
             .ansi(Ansi::StripAll)
             .overwrite(Overwrite::CollapseLine)

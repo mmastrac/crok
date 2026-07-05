@@ -1,8 +1,8 @@
 //! Spawning a process into an isolated job and killing the whole tree.
 //!
 //! [`CommandJobExt`] extends [`std::process::Command`] with `spawn_job`, which
-//! places the child in a fresh isolation unit — a process group on Unix, a Job
-//! object on Windows — so that [`Job::signal`] and [`Child::shutdown`] act
+//! places the child in a fresh isolation unit (a process group on Unix, a Job
+//! object on Windows) so that [`Job::signal`] and [`Child::shutdown`] act
 //! on the whole tree rather than just the immediate child.
 //!
 //! The platform bodies are lifted from clitest's `ScriptKillReceiver::run_cmd`.
@@ -215,17 +215,16 @@ impl Job {
         })
     }
 
-    /// Send `sig` to the tree. Only [`Signal::Kill`] does anything on Windows —
+    /// Send `sig` to the tree. Only [`Signal::Kill`] does anything on Windows:
     /// it terminates the Job (and with it every process). Graceful signals are
-    /// a no-op; escalate to `Kill`.
+    /// a no-op, so escalate to `Kill`.
     pub fn signal(&self, sig: Signal) -> io::Result<()> {
         if let Signal::Kill = sig {
             self.inner.terminated.store(true, Ordering::Relaxed);
             if let Some(job) = self.inner.job.lock().unwrap().take() {
-                // Terminate the tree synchronously with a non-zero code, rather
-                // than leaning on kill-on-job-close when the handle drops. That
-                // path exits the processes with code 0, which reads as a clean
-                // success; an explicit code marks the kill on the exit status.
+                // Terminate synchronously with a non-zero code. Kill-on-job-close
+                // (via the handle drop) exits the processes with code 0, which
+                // reads as clean success and hides the kill.
                 use windows_sys::Win32::System::JobObjects::TerminateJobObject;
                 unsafe { TerminateJobObject(job.handle() as _, 1) };
             }
@@ -306,7 +305,7 @@ impl<T> Child<T> {
     /// descendants that outlive it would otherwise hold the output pipes open
     /// and stall the drain indefinitely.
     ///
-    /// For finer control — your own deadlines, back-off, or signal sequence —
+    /// For finer control (your own deadlines, back-off, or signal sequence),
     /// drive [`Child::signal`] and [`Child::try_wait`] directly instead.
     pub fn shutdown(&mut self, sig: Signal, grace: Duration) -> io::Result<ExitStatus> {
         drop(self.stdin.take());
@@ -331,10 +330,9 @@ impl<T> Child<T> {
             std::thread::sleep(Duration::from_millis(10));
         };
 
-        // Kill the remains of the tree whether or not the leader exited in
-        // time. When it is still running the group id is provably ours; after
-        // the `try_wait` reap above the window for group-id reuse is the gap
-        // between two adjacent syscalls, not the grace period.
+        // Kill whatever remains, whether or not the leader exited in time. If
+        // it is still running the group id is provably ours. After the
+        // `try_wait` reap the reuse window is a two-syscall gap, not the grace.
         _ = self.signal(Signal::Kill);
 
         let status = match status {

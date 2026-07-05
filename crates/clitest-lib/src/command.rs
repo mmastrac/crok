@@ -38,7 +38,7 @@ impl std::fmt::Display for CommandResult {
             CommandResult::Exit(status, killed) => {
                 if *killed {
                     write!(f, "killed")?;
-                    // On Unix the status also names the signal that it gets.
+                    // On Unix the status also names the signal.
                     #[cfg(unix)]
                     {
                         use std::os::unix::process::ExitStatusExt;
@@ -127,9 +127,8 @@ impl CommandLine {
                 let mut closed = false;
 
                 loop {
-                    // Enforce the hard timeout on every pass: a chatty command
-                    // keeps the Ok arm busy and a closed stream skips recv
-                    // entirely, so neither may dodge the deadline.
+                    // Check the deadline every pass, so neither a chatty
+                    // command nor a closed stream can outrun it.
                     if start.elapsed() >= timeout {
                         cwriteln!(writer, fg = Color::Yellow, "Process took too long!");
                         kill_sender.kill();
@@ -137,9 +136,8 @@ impl CommandLine {
                         return Ok((Lines::new(output_lines), CommandResult::TimedOut));
                     }
 
-                    // The streams are done, but the child may still be running
-                    // with its output redirected elsewhere; poll it against the
-                    // same deadline.
+                    // Streams closed, but the child may still run with its
+                    // output redirected elsewhere. Poll it against the deadline.
                     if closed {
                         if child.try_wait()?.is_some() {
                             break;
@@ -167,8 +165,8 @@ impl CommandLine {
                                 String::from_utf8_lossy(e.as_bytes()).into_owned()
                             });
 
-                            // A line longer than the framer's cap arrives in
-                            // pieces; stitch them back into one logical line.
+                            // A line past the framer's cap arrives in pieces.
+                            // Stitch them back into one logical line.
                             if matches!(ending, LineEnding::Overlong) {
                                 overlong.push_str(&text);
                                 continue;
@@ -179,9 +177,8 @@ impl CommandLine {
                                 overlong.push_str(&text);
                                 std::mem::take(&mut overlong)
                             };
-                            // Drop a bare trailing CR on an unterminated final
-                            // line, matching the CRLF handling on terminated
-                            // lines.
+                            // Drop a bare trailing CR on the final unterminated
+                            // line, as CRLF lines already have theirs stripped.
                             if matches!(ending, LineEnding::Eof) && line.ends_with('\r') {
                                 line.pop();
                             }
@@ -221,9 +218,8 @@ impl CommandLine {
             },
         );
 
-        // `run_with` has joined the kill watcher, so any terminate it issued is
-        // now visible here. Read the flag out here rather than inside the
-        // closure, where it would race the watcher thread that sets it.
+        // `run_with` has joined the kill watcher, so read the flag here rather
+        // than in the closure, where it would race the watcher that sets it.
         match result {
             Ok((lines, CommandResult::Exit(status, _))) => {
                 Ok((lines, CommandResult::Exit(status, job.terminated())))

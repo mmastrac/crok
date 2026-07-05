@@ -2,7 +2,7 @@
 //!
 //! [`Capture<T>`] describes how each of the three standard streams is wired, and
 //! turns a spawned [`std::process::Child`] into an [`Output<T>`] queue plus the
-//! reader threads that feed it. `T` is the transform's output type — `Vec<u8>`
+//! reader threads that feed it. `T` is the transform's output type: `Vec<u8>`
 //! for raw byte runs, [`Line`](crate::Line) for framed lines, or any framer's
 //! item.
 //!

@@ -7,15 +7,15 @@ kill the whole process tree across platforms.
 the child with the full std builder and add three things std can't do on its
 own.
 
-- **Process-tree isolation** — `spawn_job` places the child in a new process
+- **Process-tree isolation**: `spawn_job` places the child in a new process
   group (Unix) or Job object (Windows).
-- **Streamed, typed capture** — stdout/stderr are delivered as a queue of
+- **Streamed, typed capture**: stdout/stderr are delivered as a queue of
   `Chunk<T>`s, run through a configurable transform pipeline (ANSI stripping,
   `\r` overwrite collapse, UTF-8 sanitizing) terminated by a `Framer` that sets
-  the output type: `.lines()` yields `Line`s, the default yields `Vec<u8>` byte
+  the output type. `.lines()` yields `Line`s, the default yields `Vec<u8>` byte
   runs, and a custom framer yields anything.
-- **Tree-wide termination** — `signal(Signal::…)` sends a signal to the whole
-  tree; pair it with `try_wait`/`wait` to drive your own deadlines, or use the
+- **Tree-wide termination**: `signal(Signal::…)` sends a signal to the whole
+  tree. Pair it with `try_wait`/`wait` to drive your own deadlines, or use the
   `shutdown(signal, grace)` convenience to escalate to SIGKILL. `job().clone()`
   gives a handle that can signal the tree from another thread.
 
@@ -39,5 +39,5 @@ let _status = child.shutdown(Signal::Terminate, Duration::from_secs(5))?;
 
 Extracted from the process-management code in clitest, stylus, and ssu. The
 readiness reactor (a thread-free, runtime-free capture backend built on
-`rustix`) is designed for but not yet implemented — it slots in behind `Output`
+`rustix`) is designed for but not yet implemented. It slots in behind `Output`
 without an API change.
