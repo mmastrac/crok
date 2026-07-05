@@ -117,7 +117,7 @@ impl CommandLine {
         // Watch the script-wide kill flag and bring the whole tree down if it is
         // set, while we consume the command's output on this thread. Terminate
         // gracefully, then hard-kill anything that ignores it.
-        kill_receiver.run_with(
+        let result = kill_receiver.run_with(
             || _ = job.shutdown(Signal::Terminate, Duration::from_millis(250)),
             move || {
                 let mut line_number = 1;
@@ -217,11 +217,18 @@ impl CommandLine {
                 }
 
                 let status = child.wait()?;
-                Ok((
-                    Lines::new(output_lines),
-                    CommandResult::Exit(status, child.terminated()),
-                ))
+                Ok((Lines::new(output_lines), CommandResult::Exit(status, false)))
             },
-        )
+        );
+
+        // `run_with` has joined the kill watcher, so any terminate it issued is
+        // now visible here. Read the flag out here rather than inside the
+        // closure, where it would race the watcher thread that sets it.
+        match result {
+            Ok((lines, CommandResult::Exit(status, _))) => {
+                Ok((lines, CommandResult::Exit(status, job.terminated())))
+            }
+            other => other,
+        }
     }
 }
