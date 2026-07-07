@@ -38,17 +38,19 @@ pub struct Chunk<T> {
 pub enum Event<T> {
     /// A unit of captured output.
     Chunk(Chunk<T>),
-    /// The leader process exited (and has been reaped). Chunks may still
-    /// arrive after this while descendants hold the pipes open.
+    /// The leader process exited (and has been reaped).
+    ///
+    /// This is not end-of-stream, and it is not ordered last. Trailing chunks
+    /// can arrive after it. Continue reading until the queue closes.
     Exit(ExitStatus),
 }
 
 /// The error returned by [`Output::recv_timeout`].
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RecvTimeout {
-    /// No chunk arrived within the timeout.
+    /// No event arrived within the timeout.
     Timeout,
-    /// Every stream has closed; no more chunks will ever arrive.
+    /// The queue has closed; no more events will ever arrive.
     Closed,
 }
 
