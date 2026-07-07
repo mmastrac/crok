@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "crok"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "crok-lib",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "crok-lib"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "derive-io",
  "derive_more",
@@ -352,7 +352,7 @@ version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb22e947478ccf9dc44d8922042c677a63fbb88f2cb468521d1145816e5087cb"
 dependencies = [
- "link-section 0.19.0",
+ "link-section",
  "linktime-proc-macro",
 ]
 
@@ -583,9 +583,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "keepcalm"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd1c965e525e2b0617e73535e17c581579157d0670385757d37f3641ef3f783"
+checksum = "4b99cb077720b83031c056e31d9c68a9ff7805ca702503201c0d597195fdb008"
 dependencies = [
  "parking_lot",
 ]
@@ -630,28 +630,22 @@ dependencies = [
 
 [[package]]
 name = "link-section"
-version = "0.18.3"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24670b639492630905459a6c7d47f063d33c2d4fcd5362f6e5827c5613976c9f"
+checksum = "e333fe507b738576d6da5bb3f1a7d7a1c80307ed9ef31624c057d844c19c93e9"
 dependencies = [
  "linktime-proc-macro",
 ]
 
 [[package]]
-name = "link-section"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e333fe507b738576d6da5bb3f1a7d7a1c80307ed9ef31624c057d844c19c93e9"
-
-[[package]]
 name = "linktime"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24c0237789ca078da896c7e98f9f885790fa66c3214d5977a22718a261e1b74e"
+checksum = "747e3b77d4686c927ec2052a2dcc3943e734a31b279c8f12b4332357ad9be5c8"
 dependencies = [
  "ctor",
  "dtor",
- "link-section 0.18.3",
+ "link-section",
  "linktime-proc-macro",
 ]
 
@@ -837,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "procstream"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libc",
  "tlhelp32",
@@ -949,12 +943,12 @@ dependencies = [
 
 [[package]]
 name = "scattered-collect"
-version = "0.10.0"
+version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60c604f8b89c9d0cdf7f040cb9f50e83a81306ee6149b72682d59e76fafd4e5e"
+checksum = "8bdd12e1c322169b156f50601d3171a34980821744f0281bfb07b90c642c5686"
 dependencies = [
  "ctor",
- "link-section 0.18.3",
+ "link-section",
  "linktime",
  "linktime-proc-macro",
  "wide",
