@@ -35,10 +35,24 @@ pub enum LineEnding {
     Lf,
     /// Terminated by `\r\n`.
     CrLf,
-    /// Force-emitted at the max-line cap, with no terminator seen.
+    /// The line exceeded the max-line cap. Under [`Overlong::Split`] this is a
+    /// forced piece with no terminator; under [`Overlong::Truncate`] it is the
+    /// kept prefix of the whole line.
     Overlong,
     /// The final line of the stream, with no terminator (emitted at flush).
     Eof,
+}
+
+/// What the line framer does with a line that exceeds the max-line cap.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Overlong {
+    /// Keep the first cap bytes and drop the rest, delivering one line tagged
+    /// [`LineEnding::Overlong`]. The default.
+    Truncate,
+    /// Deliver the whole line in cap-sized pieces, each tagged
+    /// [`LineEnding::Overlong`] except the last, which carries the real
+    /// terminator. Lossless, but the consumer must stitch the pieces.
+    Split,
 }
 
 /// A single framed line, the output type of the [`TransformBuilder::lines`]
@@ -193,6 +207,7 @@ pub struct TransformBuilder {
     overwrite: Option<Overwrite>,
     utf8: Option<Utf8>,
     max_line: Option<usize>,
+    overlong: Option<Overlong>,
 }
 
 impl TransformBuilder {
@@ -211,10 +226,16 @@ impl TransformBuilder {
         self
     }
 
-    /// Cap a single framed line at `max` bytes; anything longer is delivered
-    /// in [`LineEnding::Overlong`] pieces. Defaults to 1 MiB.
+    /// Cap a single framed line at `max` bytes. Defaults to 1 MiB. What
+    /// happens past the cap is set by [`overlong`](TransformBuilder::overlong).
     pub fn max_line(mut self, max: usize) -> Self {
         self.max_line = Some(max);
+        self
+    }
+
+    /// What to do with a line past the cap. Defaults to [`Overlong::Truncate`].
+    pub fn overlong(mut self, policy: Overlong) -> Self {
+        self.overlong = Some(policy);
         self
     }
 
@@ -235,9 +256,12 @@ impl TransformBuilder {
     /// Frame the stream into [`Line`]s on `\n`, stripping a trailing `\r`.
     pub fn lines(self) -> Transform<Line> {
         let max = self.max_line.unwrap_or(DEFAULT_MAX_LINE);
+        let policy = self.overlong.unwrap_or(Overlong::Truncate);
         Transform {
             stages: self.stages(),
-            framer: Arc::new(move || Box::new(LineFramer::new(max)) as Box<dyn Framer<Item = Line>>),
+            framer: Arc::new(move || {
+                Box::new(LineFramer::new(max, policy)) as Box<dyn Framer<Item = Line>>
+            }),
         }
     }
 
@@ -324,16 +348,24 @@ impl Framer for RawFramer {
 
 /// Frames the stream into [`Line`]s on `\n`, stripping a trailing `\r`, and
 /// tagging each with the [`LineEnding`] it saw.
+///
+/// Lines past the `max` cap are truncated or split per the [`Overlong`]
+/// policy, so a stream that never emits a newline cannot grow the buffer
+/// without bound.
 pub struct LineFramer {
     buf: Vec<u8>,
     max: usize,
+    policy: Overlong,
+    truncated: bool,
 }
 
 impl LineFramer {
-    pub fn new(max: usize) -> Self {
+    pub fn new(max: usize, policy: Overlong) -> Self {
         LineFramer {
             buf: Vec::new(),
             max,
+            policy,
+            truncated: false,
         }
     }
 }
@@ -344,9 +376,12 @@ impl Framer for LineFramer {
     fn push(&mut self, bytes: &[u8], out: &mut dyn FnMut(Line)) {
         for &b in bytes {
             if b == LF {
-                // Strip a trailing CR so CRLF collapses to a bare line, and
-                // record which ending we saw.
-                let ending = if self.buf.last() == Some(&CR) {
+                let ending = if self.truncated {
+                    self.truncated = false;
+                    LineEnding::Overlong
+                } else if self.buf.last() == Some(&CR) {
+                    // Strip a trailing CR so CRLF collapses to a bare line,
+                    // and record which ending we saw.
                     self.buf.pop();
                     LineEnding::CrLf
                 } else {
@@ -356,25 +391,40 @@ impl Framer for LineFramer {
                     bytes: std::mem::take(&mut self.buf),
                     ending,
                 });
-            } else {
-                // Force-emit an over-long line so a stream with no newline
-                // cannot grow the buffer without bound.
-                if self.buf.len() == self.max {
-                    out(Line {
-                        bytes: std::mem::take(&mut self.buf),
-                        ending: LineEnding::Overlong,
-                    });
+            } else if self.buf.len() == self.max {
+                match self.policy {
+                    // Drop the byte, keeping the prefix already buffered.
+                    Overlong::Truncate => self.truncated = true,
+                    Overlong::Split => {
+                        out(Line {
+                            bytes: std::mem::take(&mut self.buf),
+                            ending: LineEnding::Overlong,
+                        });
+                        self.buf.push(b);
+                    }
                 }
+            } else {
                 self.buf.push(b);
             }
         }
     }
 
     fn flush(&mut self, out: &mut dyn FnMut(Line)) {
+        // A bare trailing CR on the final unterminated line is a rewrite
+        // artifact (a progress bar parked mid-line), not content.
+        if self.buf.last() == Some(&CR) {
+            self.buf.pop();
+        }
         if !self.buf.is_empty() {
+            let ending = if self.truncated {
+                LineEnding::Overlong
+            } else {
+                LineEnding::Eof
+            };
+            self.truncated = false;
             out(Line {
                 bytes: std::mem::take(&mut self.buf),
-                ending: LineEnding::Eof,
+                ending,
             });
         }
     }
@@ -568,7 +618,7 @@ mod tests {
     #[test]
     fn line_framer_tags_endings() {
         use LineEnding::*;
-        let mut framer = LineFramer::new(40);
+        let mut framer = LineFramer::new(40, super::Overlong::Truncate);
         let mut out = Vec::new();
         let feed = |framer: &mut LineFramer, s: &str, out: &mut Vec<(String, LineEnding)>| {
             framer.push(s.as_bytes(), &mut |l| {
@@ -593,7 +643,7 @@ mod tests {
         let t = Transform::builder().lines();
         let out = run_transform(&t, &long);
         // DEFAULT_MAX_LINE is huge, so use a direct framer for the cap test.
-        let mut framer = LineFramer::new(40);
+        let mut framer = LineFramer::new(40, Overlong::Split);
         let mut lines = Vec::new();
         framer.push(long.as_bytes(), &mut |l| lines.push(l));
         framer.flush(&mut |l| lines.push(l));
@@ -605,6 +655,37 @@ mod tests {
         // The transform (with the default 1 MiB cap) sees one Eof line.
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].ending, LineEnding::Eof);
+    }
+
+    #[test]
+    fn line_framer_truncates_by_default() {
+        let mut framer = LineFramer::new(4, Overlong::Truncate);
+        let mut lines = Vec::new();
+        framer.push(b"abcdefghij\nok\n", &mut |l| lines.push(l));
+        framer.flush(&mut |l| lines.push(l));
+        let pieces: Vec<_> = lines
+            .iter()
+            .map(|l| (l.as_str_lossy().into_owned(), l.ending))
+            .collect();
+        // One line per logical line: the prefix of the long one, then "ok".
+        assert_eq!(
+            pieces,
+            vec![
+                ("abcd".into(), LineEnding::Overlong),
+                ("ok".into(), LineEnding::Lf),
+            ]
+        );
+    }
+
+    #[test]
+    fn line_framer_strips_bare_trailing_cr_at_eof() {
+        let t = Transform::builder().lines();
+        let out = run_transform(&t, "done\r");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].as_str_lossy(), "done");
+        assert_eq!(out[0].ending, LineEnding::Eof);
+        // A CR-only tail leaves nothing to emit.
+        assert!(run_transform(&t, "a\n\r").len() == 1);
     }
 
     #[test]
@@ -686,7 +767,7 @@ mod tests {
 
     #[test]
     fn lines_max_line_caps_and_tags_overlong() {
-        let t = Transform::builder().max_line(4).lines();
+        let t = Transform::builder().max_line(4).overlong(Overlong::Split).lines();
         let out = run_transform(&t, "abcdefghij\n");
         let pieces: Vec<_> = out
             .iter()

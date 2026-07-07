@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use procstream::{Capture, CommandJobExt, Line, LineEnding, Signal, Stream, Transform};
+use procstream::{Capture, CommandJobExt, Event, Line, LineEnding, Signal, Stream};
 use serde::Serialize;
 use shellish_parse::ParseOptions;
 use termcolor::Color;
@@ -109,10 +109,9 @@ impl CommandLine {
 
         // Spawn into an isolated job (a new process group / Job object) with each
         // line of stdout and stderr delivered as a chunk.
-        let mut child = command.spawn_job(Capture::piped(Transform::builder().lines()))?;
+        let (mut child, output) = command.spawn_job(Capture::lines())?;
 
         let job = child.job().clone();
-        let output = child.output();
 
         // Watch the script-wide kill flag and bring the whole tree down if it is
         // set, while we consume the command's output on this thread. Terminate
@@ -156,7 +155,8 @@ impl CommandLine {
                     };
 
                     match output.recv_timeout(wait) {
-                        Ok(chunk) => {
+                        Ok(Event::Exit(_)) => closed = true,
+                        Ok(Event::Chunk(chunk)) => {
                             let stream = chunk.stream;
                             let Line { bytes, ending } = chunk.item;
                             // Move the bytes into a String, copying only when

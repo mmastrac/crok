@@ -22,11 +22,15 @@
 //! let mut cmd = Command::new("some-long-running-command");
 //!
 //! // Spawn it into a fresh isolated job, framing output into lines.
-//! let mut child = cmd.spawn_job(Capture::piped(Transform::builder().lines()))?;
+//! let (mut child, output) = cmd.spawn_job(Capture::lines())?;
 //!
-//! for chunk in child.output().iter() {
-//!     // chunk.item is a Line, because the transform framed lines.
-//!     println!("{:?}: {}", chunk.stream, chunk.item.as_str_lossy());
+//! for event in output.iter() {
+//!     match event {
+//!         // chunk.item is a Line, because the transform framed lines.
+//!         Event::Chunk(chunk) => println!("{:?}: {}", chunk.stream, chunk.item.as_str_lossy()),
+//!         // The leader exited; chunks may still follow from its descendants.
+//!         Event::Exit(status) => println!("exited: {status}"),
+//!     }
 //! }
 //!
 //! // Signal the whole tree. Send `Signal::Terminate` now and drive your own
@@ -39,17 +43,17 @@ mod capture;
 mod job;
 mod transform;
 
-pub use capture::{Capture, CaptureBuilder, Chunk, Output, RecvTimeout, Sink, Stdin, Stream};
+pub use capture::{Capture, CaptureBuilder, Chunk, Event, Output, RecvTimeout, Sink, Stdin, Stream};
 pub use job::{Child, CommandJobExt, Job, Signal};
 pub use transform::{
-    Ansi, AnsiFilter, ByteFilter, CollapseLine, Framer, Line, LineEnding, LineFramer, Overwrite,
-    Transform, TransformBuilder, Utf8, Utf8Filter,
+    Ansi, AnsiFilter, ByteFilter, CollapseLine, Framer, Line, LineEnding, LineFramer, Overlong,
+    Overwrite, Transform, TransformBuilder, Utf8, Utf8Filter,
 };
 
 /// The common types, ready to glob-import: `use procstream::prelude::*;`.
 pub mod prelude {
     pub use crate::{
-        Ansi, Capture, Child, Chunk, CommandJobExt, Job, Line, LineEnding, Output, Overwrite,
-        RecvTimeout, Signal, Stream, Transform, Utf8,
+        Ansi, Capture, Child, Chunk, CommandJobExt, Event, Job, Line, LineEnding, Output,
+        Overlong, Overwrite, RecvTimeout, Signal, Stream, Transform, Utf8,
     };
 }

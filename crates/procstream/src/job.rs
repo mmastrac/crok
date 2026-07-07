@@ -5,16 +5,16 @@
 //! object on Windows) so that [`Job::signal`] and [`Child::shutdown`] act
 //! on the whole tree rather than just the immediate child.
 //!
-//! The platform bodies are lifted from clitest's `ScriptKillReceiver::run_cmd`.
+//! The platform bodies are lifted from crok's `ScriptKillReceiver::run_cmd`.
 
 use std::io;
 use std::process::{Command, ExitStatus};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::capture::{Capture, Output};
+use crate::capture::{Capture, Event, Output};
 
 /// A signal to deliver to a whole process tree.
 ///
@@ -34,17 +34,23 @@ pub enum Signal {
 /// Extends [`Command`] with process-tree isolation and capture.
 pub trait CommandJobExt {
     /// Spawn into a fresh isolated job (a new process group / Job object) with
-    /// the given capture. The child's output type `T` comes from the capture's
-    /// transform.
+    /// the given capture, returning the child and its output queue. The output
+    /// type `T` comes from the capture's transform.
     ///
     /// `spawn_job` owns the stdio (it sets it from `capture`) and, on Unix, the
     /// process group, and on Windows the creation flags. If you need those knobs
     /// yourself, they collide with the isolation.
-    fn spawn_job<T: Send + 'static>(&mut self, capture: Capture<T>) -> io::Result<Child<T>>;
+    fn spawn_job<T: Send + 'static>(
+        &mut self,
+        capture: Capture<T>,
+    ) -> io::Result<(Child, Output<T>)>;
 }
 
 impl CommandJobExt for Command {
-    fn spawn_job<T: Send + 'static>(&mut self, capture: Capture<T>) -> io::Result<Child<T>> {
+    fn spawn_job<T: Send + 'static>(
+        &mut self,
+        capture: Capture<T>,
+    ) -> io::Result<(Child, Output<T>)> {
         capture.apply(self);
 
         #[cfg(unix)]
@@ -64,15 +70,78 @@ impl CommandJobExt for Command {
         })?;
 
         let job = Job::adopt(&mut child)?;
-        let (output, readers, stdin) = capture.start(&mut child);
+        let (output, mut readers, stdin, tx) = capture.start(&mut child);
 
-        Ok(Child {
-            proc: child,
-            job,
-            output: Some(output),
-            readers,
-            stdin,
-        })
+        // The watcher owns the reap: the leader never lingers as a zombie, and
+        // its exit is published both as an [`Event::Exit`] on the queue and to
+        // `wait`/`try_wait` via the shared state.
+        let exit = Arc::new(ExitState::default());
+        let pid = child.id();
+        {
+            let exit = Arc::clone(&exit);
+            readers.push(std::thread::spawn(move || {
+                let result = child.wait();
+                let status = result.as_ref().ok().copied();
+                // Store before sending, so a consumer that sees the event can
+                // immediately observe the status through `try_wait`.
+                exit.set(result);
+                if let Some(status) = status {
+                    _ = tx.send(Event::Exit(status));
+                }
+            }));
+        }
+
+        Ok((
+            Child {
+                pid,
+                job,
+                exit,
+                readers,
+                stdin,
+            },
+            output,
+        ))
+    }
+}
+
+/// The leader's reaped exit, shared between the watcher thread that sets it
+/// and the `wait`/`try_wait` callers that read it.
+#[derive(Default)]
+struct ExitState {
+    status: Mutex<Option<Result<ExitStatus, Arc<io::Error>>>>,
+    cond: Condvar,
+}
+
+impl ExitState {
+    fn set(&self, result: io::Result<ExitStatus>) {
+        let mut guard = self.status.lock().unwrap();
+        *guard = Some(result.map_err(Arc::new));
+        self.cond.notify_all();
+    }
+
+    fn get(&self) -> io::Result<Option<ExitStatus>> {
+        share_result(self.status.lock().unwrap().as_ref())
+    }
+
+    fn wait(&self) -> io::Result<ExitStatus> {
+        let mut guard = self.status.lock().unwrap();
+        loop {
+            if guard.is_some() {
+                return share_result(guard.as_ref()).map(|s| s.expect("checked above"));
+            }
+            guard = self.cond.wait(guard).unwrap();
+        }
+    }
+}
+
+// Clone a stored exit result out to a caller, rewrapping the shared error.
+fn share_result(
+    stored: Option<&Result<ExitStatus, Arc<io::Error>>>,
+) -> io::Result<Option<ExitStatus>> {
+    match stored {
+        None => Ok(None),
+        Some(Ok(status)) => Ok(Some(*status)),
+        Some(Err(e)) => Err(io::Error::new(e.kind(), Arc::clone(e))),
     }
 }
 
@@ -142,10 +211,9 @@ impl Job {
     /// send `sig`, wait up to `grace` for the tree to die, then `SIGKILL`
     /// anything still alive.
     ///
-    /// A `Job` cannot reap the leader, so pair this with [`Child::wait`]
-    /// elsewhere. If the tree dies (or is reaped) during the grace period this
-    /// returns early without sending the kill, so a stale group id is never
-    /// signalled.
+    /// The spawn's watcher thread reaps the leader as it exits, so a dead tree
+    /// is observed promptly: this returns early without sending the kill, and
+    /// a stale group id is never signalled.
     pub fn shutdown(&self, sig: Signal, grace: Duration) -> io::Result<()> {
         self.signal(sig)?;
 
@@ -241,19 +309,21 @@ impl Job {
     }
 }
 
-/// A spawned, isolated child process and its captured output of type `T`.
-pub struct Child<T> {
-    proc: std::process::Child,
+/// A spawned, isolated child process. Its captured output arrives on the
+/// [`Output`] queue returned alongside it by
+/// [`spawn_job`](CommandJobExt::spawn_job).
+pub struct Child {
+    pid: u32,
     job: Job,
-    output: Option<Output<T>>,
+    exit: Arc<ExitState>,
     readers: Vec<JoinHandle<()>>,
     stdin: Option<std::process::ChildStdin>,
 }
 
-impl<T> Child<T> {
+impl Child {
     /// The immediate child's process id.
     pub fn id(&self) -> u32 {
-        self.proc.id()
+        self.pid
     }
 
     /// The isolation job for the whole tree. Clone it for a handle that can
@@ -273,19 +343,15 @@ impl<T> Child<T> {
         self.job.terminated()
     }
 
-    /// Take the captured output queue. Panics if called more than once.
-    pub fn output(&mut self) -> Output<T> {
-        self.output.take().expect("output already taken")
-    }
-
     /// Take the child's stdin handle, if stdin was piped.
     pub fn stdin(&mut self) -> Option<std::process::ChildStdin> {
         self.stdin.take()
     }
 
-    /// Check whether the child has exited without blocking.
-    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.proc.try_wait()
+    /// Check whether the child has exited without blocking. The watcher
+    /// thread reaps it, so this only consults the shared exit state.
+    pub fn try_wait(&self) -> io::Result<Option<ExitStatus>> {
+        self.exit.get()
     }
 
     /// Wait for the child to exit and drain the reader threads.
@@ -293,7 +359,7 @@ impl<T> Child<T> {
         // Close our end of stdin first (as std's `wait` does) so a child
         // reading stdin to EOF exits rather than deadlocking against us.
         drop(self.stdin.take());
-        let status = self.proc.wait()?;
+        let status = self.exit.wait()?;
         self.join_readers();
         Ok(status)
     }
@@ -321,7 +387,7 @@ impl<T> Child<T> {
 
         let deadline = Instant::now() + grace;
         let status = loop {
-            if let Some(status) = self.proc.try_wait()? {
+            if let Some(status) = self.try_wait()? {
                 break Some(status);
             }
             if Instant::now() >= deadline {
@@ -332,12 +398,12 @@ impl<T> Child<T> {
 
         // Kill whatever remains, whether or not the leader exited in time. If
         // it is still running the group id is provably ours. After the
-        // `try_wait` reap the reuse window is a two-syscall gap, not the grace.
+        // watcher's reap the reuse window is a two-syscall gap, not the grace.
         _ = self.signal(Signal::Kill);
 
         let status = match status {
             Some(status) => status,
-            None => self.proc.wait()?,
+            None => self.exit.wait()?,
         };
         self.join_readers();
         Ok(status)
@@ -360,24 +426,42 @@ mod tests {
     fn captures_lines() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("printf 'a\\nb\\nc\\n'");
-        let mut child = cmd
-            .spawn_job(Capture::piped(Transform::builder().lines()))
-            .unwrap();
+        let (mut child, output) = cmd.spawn_job(Capture::lines()).unwrap();
 
-        let lines: Vec<String> = child
-            .output()
+        let lines: Vec<String> = output
             .iter()
-            .map(|c| c.item.as_str_lossy().into_owned())
+            .filter_map(|e| match e {
+                Event::Chunk(c) => Some(c.item.as_str_lossy().into_owned()),
+                Event::Exit(_) => None,
+            })
             .collect();
         assert_eq!(lines, vec!["a", "b", "c"]);
         assert!(child.wait().unwrap().success());
     }
 
     #[test]
+    fn exit_event_is_delivered() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("echo out; exit 3");
+        let (child, output) = cmd.spawn_job(Capture::lines()).unwrap();
+
+        let mut exit = None;
+        for event in output.iter() {
+            if let Event::Exit(status) = event {
+                // The status is observable through try_wait as soon as the
+                // event is seen.
+                assert!(child.try_wait().unwrap().is_some());
+                exit = Some(status);
+            }
+        }
+        assert_eq!(exit.unwrap().code(), Some(3));
+    }
+
+    #[test]
     fn signal_kill_stops_a_sleep() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 30");
-        let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+        let (mut child, _output) = cmd.spawn_job(Capture::raw()).unwrap();
 
         child.signal(Signal::Kill).unwrap();
         // The child must die promptly rather than sleeping for 30s.
@@ -392,7 +476,7 @@ mod tests {
         // Trap SIGTERM so only the escalating SIGKILL can bring it down.
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("trap '' TERM; sleep 30");
-        let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+        let (mut child, _output) = cmd.spawn_job(Capture::raw()).unwrap();
 
         let start = Instant::now();
         let status = child
@@ -409,11 +493,10 @@ mod tests {
         // rather than hang draining the readers.
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("trap '' TERM; sleep 30 & echo go; exit 0");
-        let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+        let (mut child, output) = cmd.spawn_job(Capture::raw()).unwrap();
 
         // Wait for the echo so the trap is installed (and the leader is about
         // to exit) before we start signalling.
-        let output = child.output();
         assert!(output.recv().is_some());
 
         let start = Instant::now();
@@ -429,7 +512,7 @@ mod tests {
         // `cat` reads stdin to EOF; wait() must close our end of the pipe
         // rather than deadlock against a child waiting for input.
         let mut cmd = Command::new("cat");
-        let mut child = cmd
+        let (mut child, _output) = cmd
             .spawn_job(
                 Capture::builder()
                     .stdout(Transform::raw())
@@ -447,7 +530,7 @@ mod tests {
     fn terminated_tracks_our_own_kill() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 30");
-        let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+        let (mut child, _output) = cmd.spawn_job(Capture::raw()).unwrap();
 
         assert!(!child.terminated());
         child.signal(Signal::Kill).unwrap();
@@ -459,20 +542,16 @@ mod tests {
     fn job_shutdown_returns_early_when_the_tree_dies() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 30");
-        let mut child = cmd.spawn_job(Capture::piped(Transform::raw())).unwrap();
+        let (mut child, _output) = cmd.spawn_job(Capture::raw()).unwrap();
         let job = child.job().clone();
 
-        // A Job cannot reap, so the terminated leader lingers as a zombie in
-        // its own group until a Child owner waits on it (as clitest's main
-        // thread does). Reap on another thread so shutdown's liveness probe
-        // sees the group vanish and returns without burning the whole grace.
-        let reaper = std::thread::spawn(move || child.wait());
-
+        // The watcher thread reaps the terminated leader, so the liveness
+        // probe sees the group vanish and returns without burning the grace.
         let start = Instant::now();
         job.shutdown(Signal::Terminate, Duration::from_secs(10))
             .unwrap();
         assert!(start.elapsed() < Duration::from_secs(5));
 
-        assert!(!reaper.join().unwrap().unwrap().success());
+        assert!(!child.wait().unwrap().success());
     }
 }

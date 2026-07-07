@@ -11,7 +11,7 @@
 //! behind this same type and the threads go away without an API change.
 
 use std::io::Read;
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -33,6 +33,16 @@ pub struct Chunk<T> {
     pub item: T,
 }
 
+/// One event on the [`Output`] queue.
+#[derive(Clone, Debug)]
+pub enum Event<T> {
+    /// A unit of captured output.
+    Chunk(Chunk<T>),
+    /// The leader process exited (and has been reaped). Chunks may still
+    /// arrive after this while descendants hold the pipes open.
+    Exit(ExitStatus),
+}
+
 /// The error returned by [`Output::recv_timeout`].
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RecvTimeout {
@@ -42,22 +52,23 @@ pub enum RecvTimeout {
     Closed,
 }
 
-/// A queue of captured [`Chunk`]s from a child's streams.
+/// A queue of [`Event`]s from a child: captured chunks plus its exit.
 ///
-/// The queue drains once every capturing stream has closed (the child exited or
-/// closed its pipes). This is the seam the reactor slots behind.
+/// The queue closes once every capturing stream has hit EOF and the exit has
+/// been delivered, so a consumer that drains it to the end has seen everything.
+/// This is the seam the reactor slots behind.
 pub struct Output<T> {
-    rx: Receiver<Chunk<T>>,
+    rx: Receiver<Event<T>>,
 }
 
 impl<T> Output<T> {
-    /// Block until the next chunk, or return `None` once all streams have closed.
-    pub fn recv(&self) -> Option<Chunk<T>> {
+    /// Block until the next event, or return `None` once the queue has closed.
+    pub fn recv(&self) -> Option<Event<T>> {
         self.rx.recv().ok()
     }
 
-    /// Block for up to `timeout` for the next chunk.
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<Chunk<T>, RecvTimeout> {
+    /// Block for up to `timeout` for the next event.
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<Event<T>, RecvTimeout> {
         use std::sync::mpsc::RecvTimeoutError;
         self.rx.recv_timeout(timeout).map_err(|e| match e {
             RecvTimeoutError::Timeout => RecvTimeout::Timeout,
@@ -65,8 +76,8 @@ impl<T> Output<T> {
         })
     }
 
-    /// Iterate chunks until every stream has closed.
-    pub fn iter(&self) -> impl Iterator<Item = Chunk<T>> + '_ {
+    /// Iterate events until the queue closes.
+    pub fn iter(&self) -> impl Iterator<Item = Event<T>> + '_ {
         std::iter::from_fn(move || self.rx.recv().ok())
     }
 }
@@ -124,6 +135,15 @@ impl Stdin {
     }
 }
 
+/// What [`Capture::start`] hands back to `spawn_job`: the queue, the reader
+/// threads, the piped stdin, and a sender for the exit watcher.
+pub(crate) type Started<T> = (
+    Output<T>,
+    Vec<JoinHandle<()>>,
+    Option<ChildStdin>,
+    Sender<Event<T>>,
+);
+
 /// Describes how all three of a child's standard streams are captured.
 pub struct Capture<T> {
     pub stdout: Sink<T>,
@@ -138,6 +158,23 @@ impl<T> Clone for Capture<T> {
             stderr: self.stderr.clone(),
             stdin: self.stdin,
         }
+    }
+}
+
+impl Capture<crate::Line> {
+    /// Frame both stdout and stderr into [`Line`](crate::Line)s with the
+    /// default transform, stdin discarded. Shorthand for
+    /// `Capture::piped(Transform::builder().lines())`.
+    pub fn lines() -> Self {
+        Capture::piped(Transform::builder().lines())
+    }
+}
+
+impl Capture<Vec<u8>> {
+    /// Deliver both stdout and stderr as raw byte runs, stdin discarded.
+    /// Shorthand for `Capture::piped(Transform::raw())`.
+    pub fn raw() -> Self {
+        Capture::piped(Transform::raw())
     }
 }
 
@@ -170,11 +207,9 @@ impl<T: Send + 'static> Capture<T> {
     }
 
     /// Take the piped handles off a freshly-spawned child and start the reader
-    /// threads that feed the returned [`Output`].
-    pub(crate) fn start(
-        &self,
-        child: &mut std::process::Child,
-    ) -> (Output<T>, Vec<JoinHandle<()>>, Option<ChildStdin>) {
+    /// threads that feed the returned [`Output`]. The returned sender is for
+    /// the exit watcher; the queue closes once it and every reader are done.
+    pub(crate) fn start(&self, child: &mut std::process::Child) -> Started<T> {
         let (tx, rx) = channel();
         let mut readers = Vec::new();
 
@@ -186,12 +221,9 @@ impl<T: Send + 'static> Capture<T> {
             let stderr = child.stderr.take().expect("stderr was piped");
             readers.push(pump(stderr, Stream::Stderr, transform, tx.clone()));
         }
-        // Drop our own sender so the queue closes once the reader threads (which
-        // hold the only remaining senders) finish.
-        drop(tx);
 
         let stdin = child.stdin.take();
-        (Output { rx }, readers, stdin)
+        (Output { rx }, readers, stdin, tx)
     }
 }
 
@@ -242,7 +274,7 @@ fn pump<R, T>(
     mut reader: R,
     stream: Stream,
     transform: &Transform<T>,
-    tx: Sender<Chunk<T>>,
+    tx: Sender<Event<T>>,
 ) -> JoinHandle<()>
 where
     R: Read + Send + 'static,
@@ -255,14 +287,14 @@ where
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => pipeline.push(&buf[..n], &mut |item| {
-                    _ = tx.send(Chunk { stream, item });
+                    _ = tx.send(Event::Chunk(Chunk { stream, item }));
                 }),
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             }
         }
         pipeline.flush(&mut |item| {
-            _ = tx.send(Chunk { stream, item });
+            _ = tx.send(Event::Chunk(Chunk { stream, item }));
         });
     })
 }
