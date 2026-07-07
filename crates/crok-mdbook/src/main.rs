@@ -1,6 +1,6 @@
 use clap::{Arg, ArgMatches, Command};
-use clitest_lib::parser;
-use clitest_lib::script::{Script, ScriptFile, ScriptOutput, ScriptRunArgs, ScriptRunContext};
+use crok_lib::parser;
+use crok_lib::script::{Script, ScriptFile, ScriptOutput, ScriptRunArgs, ScriptRunContext};
 use mdbook_preprocessor::book::{Book, BookItem};
 use mdbook_preprocessor::errors::Error;
 use mdbook_preprocessor::{parse_input, Preprocessor, PreprocessorContext, MDBOOK_VERSION};
@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub fn make_app() -> Command {
-    Command::new("mdbook-clitest")
-        .about("A mdbook preprocessor that runs CLI tests")
+    Command::new("mdbook-crok")
+        .about("A mdbook preprocessor that runs crok tests")
         .subcommand(
             Command::new("supports")
                 .arg(Arg::new("renderer").required(true))
@@ -21,17 +21,17 @@ pub fn make_app() -> Command {
         )
 }
 
-struct ClitestPreprocessor;
+struct CrokPreprocessor;
 
-impl ClitestPreprocessor {
-    pub fn new() -> ClitestPreprocessor {
-        ClitestPreprocessor
+impl CrokPreprocessor {
+    pub fn new() -> CrokPreprocessor {
+        CrokPreprocessor
     }
 }
 
-impl Preprocessor for ClitestPreprocessor {
+impl Preprocessor for CrokPreprocessor {
     fn name(&self) -> &str {
-        "clitest"
+        "crok"
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
@@ -53,7 +53,7 @@ impl Preprocessor for ClitestPreprocessor {
                 }
                 if in_session && line.starts_with("```") {
                     in_session = false;
-                    let mut script = "#!/usr/bin/env clitest --v0\n".to_string();
+                    let mut script = "#!/usr/bin/env crok --v0\n".to_string();
                     script.push_str(&std::mem::take(&mut session_lines).join("\n"));
                     let script_path = ctx.root.join(ch.path.as_ref().unwrap()).to_owned();
                     let result = parser::parse_script(ScriptFile::new(script_path.clone()), &script);
@@ -140,7 +140,7 @@ fn handle_supports(pre: &dyn Preprocessor, sub_args: &ArgMatches) -> ! {
 
 fn main() {
     let matches = make_app().get_matches();
-    let preprocessor = ClitestPreprocessor::new();
+    let preprocessor = CrokPreprocessor::new();
 
     if let Some(sub_args) = matches.subcommand_matches("supports") {
         handle_supports(&preprocessor, sub_args);

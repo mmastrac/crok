@@ -1,7 +1,7 @@
 { rustPlatform, lib }:
 
 rustPlatform.buildRustPackage {
-  pname = "clitest";
+  pname = "crok";
   version = "0.7.0";
 
   src = ./.;
@@ -12,16 +12,16 @@ rustPlatform.buildRustPackage {
 
   cargoBuildFlags = [
     "-p"
-    "clitest"
+    "crok"
   ];
   cargoTestFlags = [
     "-p"
-    "clitest"
+    "crok"
   ];
 
   meta = with lib; {
-    description = "CLI/test: A literate CLI testing tool";
-    homepage = "https://github.com/mmastrac/clitest";
+    description = "crok: A literate CLI testing tool";
+    homepage = "https://github.com/mmastrac/crok";
     license = [
       licenses.mit
       licenses.asl20

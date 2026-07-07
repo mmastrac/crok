@@ -1,8 +1,8 @@
 # Getting Started
 
-## Why **CLI/test**?
+## Why **crok**?
 
-**CLI/test** makes it easy to write and maintain tests for command-line
+**crok** makes it easy to write and maintain tests for command-line
 applications. Its syntax is designed to be concise, human-readable, and
 powerful, allowing you to express complex test scenarios without extra noise.
 

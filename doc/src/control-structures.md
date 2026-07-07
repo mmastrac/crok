@@ -1,6 +1,6 @@
 # Control Structures
 
-*CLI/test* provides several control structures to help you write complex test scenarios.
+*crok* provides several control structures to help you write complex test scenarios.
 
 ## For Loops
 

@@ -1,6 +1,6 @@
 # Reference
 
-This reference provides an overview of all _CLI/test_ syntax elements organized
+This reference provides an overview of all _crok_ syntax elements organized
 by category.
 
 ## Command Execution
@@ -20,7 +20,7 @@ by category.
 
 ## Variables and Quoting
 
-clitest uses shell-style variable references and quoting to delimit strings in
+crok uses shell-style variable references and quoting to delimit strings in
 commands and control structures.
 
 | Quote Type | Behavior                                              | Location                                   |
@@ -34,7 +34,7 @@ commands and control structures.
 
 ## Special Variables
 
-These variables are automatically set by _CLI/test_ and available in all
+These variables are automatically set by _crok_ and available in all
 scripts:
 
 | Variable         | Description                               | Values                                        |
@@ -90,7 +90,7 @@ scripts:
 
 ## Common Grok Patterns
 
-This is a subset of the grok patterns supported by clitest. See the full list of
+This is a subset of the grok patterns supported by crok. See the full list of
 supported patterns at <https://docs.rs/grok/latest/grok/patterns/index.html>,
 including the full base patterns in the `grok` module:
 <https://docs.rs/grok/latest/grok/patterns/grok/index.html>.

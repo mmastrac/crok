@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 # Mark this line as <ignore> for the exact output test.
 $ echo "<ignore> $TARGET_OS"

@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 # All grok captures of "word" must match
 $ echo "Hello, world!"; echo "Goodbye, world!"

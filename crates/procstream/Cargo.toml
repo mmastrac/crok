@@ -5,7 +5,7 @@ version.workspace = true
 authors = ["Matt Mastracci <matthew@mastracci.com>"]
 edition = "2024"
 description = "Spawn background processes, capture their output as a stream of transformed chunks, and kill the whole process tree across platforms."
-repository = "https://github.com/mmastrac/clitest"
+repository = "https://github.com/mmastrac/crok"
 readme = "README.md"
 
 [dependencies]

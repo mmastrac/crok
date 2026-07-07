@@ -1,6 +1,6 @@
 # Environment and Variables
 
-*CLI/test* provides powerful features for managing environment variables and working directories.
+*crok* provides powerful features for managing environment variables and working directories.
 
 ## Setting Variables
 

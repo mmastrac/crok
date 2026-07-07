@@ -1,6 +1,6 @@
 # Pattern Matching
 
-*CLI/test* provides two main types of pattern matching: auto-escaped patterns (`!`)
+*crok* provides two main types of pattern matching: auto-escaped patterns (`!`)
 and raw patterns (`?`). Each has its own use cases and syntax.
 
 ## Auto-escaped Patterns (`!`)
@@ -31,7 +31,7 @@ $ printf "  X  \n"
 
 ## Grok Patterns
 
-*CLI/test* supports [grok patterns](./grok-patterns.md) for flexible matching:
+*crok* supports [grok patterns](./grok-patterns.md) for flexible matching:
 
 ```bash session
 $ echo "Hello, anything"

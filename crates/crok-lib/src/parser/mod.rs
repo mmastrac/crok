@@ -25,14 +25,25 @@ pub struct Scripts {
     pub scripts: BTreeMap<ScriptFile, Script>,
 }
 
+const V0_HEADERS: &[&str] = &[
+    "#!/usr/bin/env crok --v0",
+    "#!/usr/bin/env clitest --v0",
+    "#!/usr/bin/env clitest",
+];
+
+fn is_v0_header(line: &str) -> bool {
+    V0_HEADERS.contains(&line)
+}
+
 pub fn parse_script(file: ScriptFile, script: &str) -> Result<Script, ScriptError> {
     let version = script.lines().next().unwrap_or_default();
-    match version {
-        "#!/usr/bin/env clitest --v0" => v0::parse_script(file, script),
-        _ => Err(ScriptError::new(
+    if is_v0_header(version) {
+        v0::parse_script(file, script)
+    } else {
+        Err(ScriptError::new(
             ScriptErrorType::InvalidVersion,
             ScriptLocation::new(file, 1),
-        )),
+        ))
     }
 }
 
@@ -113,5 +124,22 @@ where
         Ok(scripts)
     } else {
         Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_clitest_shebang() {
+        let script = "#!/usr/bin/env clitest --v0\n\n$ echo hi\n! hi\n";
+        parse_script(ScriptFile::new("test.cli"), script).unwrap();
+    }
+
+    #[test]
+    fn accepts_clitest_shebang_without_v0_flag() {
+        let script = "#!/usr/bin/env clitest\n\n$ echo hi\n! hi\n";
+        parse_script(ScriptFile::new("test.cli"), script).unwrap();
     }
 }

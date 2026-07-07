@@ -2,10 +2,10 @@
 authors = ["Matt Mastracci", "Estefania Barreto-Ojeda"]
 language = "en"
 src = "src"
-title = "CLI/test Documentation"
-description = "Documentation and reference guide for the CLI/test tool"
+title = "crok Documentation"
+description = "Documentation and reference guide for the crok tool"
 
-[preprocessor.clitest]
+[preprocessor.crok]
 
 [output.html]
 no-section-label = true

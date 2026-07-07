@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 # A final line with no trailing newline but a trailing CR drops the CR to match.
 $ printf 'done\r'
@@ -8,3 +8,4 @@ $ printf 'done\r'
 $ printf 'a\r\nb\r\n'
 ! a
 ! b
+

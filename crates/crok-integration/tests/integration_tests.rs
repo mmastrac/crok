@@ -1,10 +1,10 @@
 use std::time::Instant;
 
-use clitest_lib::{
+use crok_lib::{
     cprint, cprintln, cprintln_rule, term::Color, try_run_file_captured, util::NicePathBuf,
 };
 
-use clitest_integration::testing::{TestCase, load_test_scripts, root_dir, tests_dir};
+use crok_integration::testing::{TestCase, load_test_scripts, root_dir, tests_dir};
 
 fn main() {
     let root = root_dir();
@@ -84,7 +84,7 @@ fn main() {
         cprint!(fg = Color::Green, "{}", test.name);
         cprintln!(" ... ");
         cprintln_rule!();
-        match clitest_lib::try_run_file_captured(test.path.as_ref()) {
+        match crok_lib::try_run_file_captured(test.path.as_ref()) {
             Ok(output) => cprintln!("{}", output),
             Err(e) => {
                 if !e.output.is_empty() {
