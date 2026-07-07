@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use procstream::{Capture, CommandJobExt, Event, Line, LineEnding, Signal, Stream};
+use procstream::{Capture, CommandJobExt, Event, Signal, Stream};
 use serde::Serialize;
 use shellish_parse::ParseOptions;
 use termcolor::Color;
@@ -121,28 +121,40 @@ impl CommandLine {
             move || {
                 let mut line_number = 1;
                 let mut output_lines = vec![];
-                let mut overlong = String::new();
                 let mut warned = false;
-                let mut closed = false;
+
+                // The framer delivers whole lines: it truncates an over-long
+                // line to one Overlong-tagged line and strips a bare trailing
+                // CR at end of stream, so nothing to stitch or trim here.
+                let mut push_line = |stream: Stream, line: String| {
+                    if show_line_numbers {
+                        cwrite!(
+                            writer,
+                            fg = Color::White,
+                            dimmed = true,
+                            "{line_number:>3} "
+                        );
+                    }
+
+                    let line_out = fast_strip_ansi::strip_ansi_string(&line);
+                    if stream == Stream::Stdout {
+                        cwriteln!(writer, fg = Color::White, "{line_out}");
+                    } else {
+                        cwriteln!(writer, fg = Color::Yellow, "{line_out}");
+                    }
+
+                    output_lines.push(line);
+                    line_number += 1;
+                };
 
                 loop {
-                    // Check the deadline every pass, so neither a chatty
-                    // command nor a closed stream can outrun it.
+                    // Check the deadline every pass, so a silent command cannot
+                    // outrun it while we wait for output or exit.
                     if start.elapsed() >= timeout {
                         cwriteln!(writer, fg = Color::Yellow, "Process took too long!");
                         kill_sender.kill();
                         _ = child.shutdown(Signal::Terminate, Duration::from_millis(250));
                         return Ok((Lines::new(output_lines), CommandResult::TimedOut));
-                    }
-
-                    // Streams closed, but the child may still run with its
-                    // output redirected elsewhere. Poll it against the deadline.
-                    if closed {
-                        if child.try_wait()?.is_some() {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(10));
-                        continue;
                     }
 
                     // Wake at the warning threshold (once), then again at the hard
@@ -155,55 +167,18 @@ impl CommandLine {
                     };
 
                     match output.recv_timeout(wait) {
-                        Ok(Event::Exit(_)) => closed = true,
                         Ok(Event::Chunk(chunk)) => {
                             let stream = chunk.stream;
-                            let Line { bytes, ending } = chunk.item;
                             // Move the bytes into a String, copying only when
                             // invalid UTF-8 forces a lossy pass.
-                            let text = String::from_utf8(bytes).unwrap_or_else(|e| {
+                            let line = String::from_utf8(chunk.item.bytes).unwrap_or_else(|e| {
                                 String::from_utf8_lossy(e.as_bytes()).into_owned()
                             });
-
-                            // A line past the framer's cap arrives in pieces.
-                            // Stitch them back into one logical line.
-                            if matches!(ending, LineEnding::Overlong) {
-                                overlong.push_str(&text);
-                                continue;
-                            }
-                            let mut line = if overlong.is_empty() {
-                                text
-                            } else {
-                                overlong.push_str(&text);
-                                std::mem::take(&mut overlong)
-                            };
-                            // Drop a bare trailing CR on the final unterminated
-                            // line, as CRLF lines already have theirs stripped.
-                            if matches!(ending, LineEnding::Eof) && line.ends_with('\r') {
-                                line.pop();
-                            }
-
-                            if show_line_numbers {
-                                cwrite!(
-                                    writer,
-                                    fg = Color::White,
-                                    dimmed = true,
-                                    "{line_number:>3} "
-                                );
-                            }
-
-                            // Careful that we don't print ANSI escape sequences
-                            let line_out = fast_strip_ansi::strip_ansi_string(&line);
-                            if stream == Stream::Stdout {
-                                cwriteln!(writer, fg = Color::White, "{line_out}");
-                            } else {
-                                cwriteln!(writer, fg = Color::Yellow, "{line_out}");
-                            }
-
-                            output_lines.push(line);
-                            line_number += 1;
+                            push_line(stream, line);
                         }
-                        Err(procstream::RecvTimeout::Closed) => closed = true,
+                        // The leader may exit before we have drained every chunk.
+                        Ok(Event::Exit(_)) => {}
+                        Err(procstream::RecvTimeout::Closed) => break,
                         Err(procstream::RecvTimeout::Timeout) => {
                             if !warned && start.elapsed() < timeout {
                                 eprintln!("Process #{} taking too long to finish.", child.id());
