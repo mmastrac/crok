@@ -1,0 +1,18 @@
+[package]
+name = "clitest"
+license = "MIT/Apache-2.0"
+version.workspace = true
+authors = ["Matt Mastracci <matthew@mastracci.com>"]
+edition = "2024"
+description = "Compatibility shim for crok"
+repository = "https://github.com/mmastrac/crok"
+readme = "README.md"
+
+default-run = "clitest"
+
+[dependencies]
+crok.workspace = true
+
+[[bin]]
+name = "clitest"
+path = "src/main.rs"

@@ -3,9 +3,10 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.8.0" # Update versions below as well
+version = "0.8.1" # Update versions below as well
 
 [workspace.dependencies]
+crok = { path = "crates/crok", version = "0.8.1" }
 crok-lib = { path = "crates/crok-lib", version = "0.8.0" }
 procstream = { path = "crates/procstream", version = "0.8.0" }
 
