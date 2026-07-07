@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 $ printf "a,b,c,u1,repeat,u2,u3" | tr ',' '\n'
 unordered {

@@ -1,17 +1,17 @@
 [package]
 name = "crok"
 license = "MIT/Apache-2.0"
-version = "0.0.0"
+version.workspace = true
 authors = ["Matt Mastracci <matthew@mastracci.com>"]
 edition = "2024"
-description = "CLI/test: A literate CLI testing tool"
-repository = "https://github.com/mmastrac/clitest"
+description = "crok: A literate CLI testing tool"
+repository = "https://github.com/mmastrac/crok"
 readme = "README.md"
 
-default-run = "clitest"
+default-run = "crok"
 
 [dependencies]
-clitest-lib.workspace = true
+crok-lib.workspace = true
 clap = { workspace = true, features = ["derive"] }
 termcolor.workspace = true
 termimad.workspace = true
@@ -23,5 +23,5 @@ toml.workspace = true
 dunce.workspace = true
 
 [[bin]]
-name = "clitest"
+name = "crok"
 path = "src/main.rs" 

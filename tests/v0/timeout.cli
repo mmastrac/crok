@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 $ echo "Goodnight, forever!" && sleep 60
 %TIMEOUT 100ms

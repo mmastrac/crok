@@ -1,16 +1,16 @@
 [package]
-name = "clitest-mdbook"
+name = "crok-mdbook"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
 [dependencies]
 mdbook-preprocessor.workspace = true
-clitest-lib.workspace = true
+crok-lib.workspace = true
 serde_json.workspace = true
 clap = { workspace = true, features = ["cargo", "wrap_help"] }
 semver.workspace = true
 
 [[bin]]
-name = "mdbook-clitest"
+name = "mdbook-crok"
 path = "src/main.rs" 

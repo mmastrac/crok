@@ -1,11 +1,11 @@
 [package]
-name = "clitest-integration"
+name = "crok-integration"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-clitest-lib.workspace = true
+crok-lib.workspace = true
 pretty_assertions.workspace = true
 termcolor.workspace = true
 dunce.workspace = true

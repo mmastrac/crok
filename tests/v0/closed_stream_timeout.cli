@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 # The command closes stdout and stderr but keeps running. The hard timeout must
 # still fire rather than blocking forever on the now-silent child.

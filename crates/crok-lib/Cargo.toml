@@ -1,11 +1,11 @@
 [package]
-name = "clitest-lib"
+name = "crok-lib"
 license = "MIT/Apache-2.0"
 version.workspace = true
 authors = ["Matt Mastracci <matthew@mastracci.com>"]
 edition = "2024"
 description = "CLI-based testing library."
-repository = "https://github.com/mmastrac/clitest"
+repository = "https://github.com/mmastrac/crok"
 readme = "../../README.md"
 
 [features]
@@ -40,5 +40,5 @@ scattered-collect.workspace = true
 pretty_assertions.workspace = true
 
 [lib]
-name = "clitest_lib"
+name = "crok_lib"
 path = "src/lib.rs" 

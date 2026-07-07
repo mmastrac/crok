@@ -1,6 +1,6 @@
 # Advanced Features
 
-This chapter covers advanced features and best practices for using *CLI/test* effectively.
+This chapter covers advanced features and best practices for using *crok* effectively.
 
 ## Complex Pattern Matching
 

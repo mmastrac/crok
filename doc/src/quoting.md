@@ -1,6 +1,6 @@
 # Quoting
 
-*CLI/test* uses shell-style quoting and variable expansion for commands,
+*crok* uses shell-style quoting and variable expansion for commands,
 command-lines and control structures.
 
 ## For Command-Lines (`$`)
@@ -17,7 +17,7 @@ The shell will use POSIX-compliant quoting and unescaping rules.
 ## For Internal Commands and Control Structures (`set`, `if`, `for`, etc.)
 
 Internal commands and control structures are not passed to the shell, and are
-processed by *CLI/test* itself.
+processed by *crok* itself.
 
 Unescaping rules for characters (eg: `\n`, `\xXX`) are applied eagerly at
 parsing time, while variable references are lazily expanded at runtime.

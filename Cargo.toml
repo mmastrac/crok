@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.7.0" # Update versions below as well
 
 [workspace.dependencies]
-clitest-lib = { path = "crates/clitest-lib", version = "0.7.0" }
+crok-lib = { path = "crates/crok-lib", version = "0.7.0" }
 procstream = { path = "crates/procstream", version = "0.7.0" }
 
 clap = "4.6.1"

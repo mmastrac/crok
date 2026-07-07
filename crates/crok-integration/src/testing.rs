@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use clitest_lib::util::NicePathBuf;
+use crok_lib::util::NicePathBuf;
 
 pub struct TestCase {
     pub name: String,

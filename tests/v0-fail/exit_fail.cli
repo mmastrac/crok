@@ -1,4 +1,4 @@
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 
 $ exit 1
 

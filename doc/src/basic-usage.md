@@ -2,10 +2,10 @@
 
 ## Running Tests
 
-To run tests using `clitest`, just pass the tests files to the `clitest` command:
+To run tests using `crok`, just pass the tests files to the `crok` command:
 
 ```bash
-clitest [options] [test-file] [test-file] ...
+crok [options] [test-file] [test-file] ...
 ```
 
 The test runner will exit with a non-zero exit code if any command does not match its expected output.
@@ -15,7 +15,7 @@ The test runner will exit with a non-zero exit code if any command does not matc
 Each test file should start with the shebang:
 
 ```bash session
-#!/usr/bin/env clitest --v0
+#!/usr/bin/env crok --v0
 ```
 
 The `--v0` flag indicates that the test file uses version 0 of the syntax. This
@@ -69,7 +69,7 @@ $ echo "Hello World"
 
 ## Exit Codes
 
-By default, *CLI/test* expects commands to exit with code 0. You can specify a different expected exit code 
+By default, *crok* expects commands to exit with code 0. You can specify a different expected exit code 
 using `%EXIT`. `%` directives appear between the command (`$`) and patterns:
 
 ```bash session

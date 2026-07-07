@@ -1,1 +1,1 @@
-Error reading script file <root>/invalid_header.cli: invalid version header, expected `#!/usr/bin/env clitest --v0` at <root>/invalid_header.cli:1
+Error reading script file <root>/invalid_header.cli: invalid version header, expected `#!/usr/bin/env crok --v0` at <root>/invalid_header.cli:1

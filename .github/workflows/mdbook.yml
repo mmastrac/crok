@@ -37,7 +37,7 @@ jobs:
           crate: mdbook-linkcheck
           version: ${{ env.MDBOOK_LINKCHECK_VERSION }}
       - name: Cargo build
-        run: cargo build --bin mdbook-clitest -p clitest-mdbook
+        run: cargo build --bin mdbook-crok -p crok-mdbook
       - name: Add target/ to path
         run: echo "PATH=$PATH:$PWD/target/debug/" >> "$GITHUB_ENV"
       - name: Setup Pages
