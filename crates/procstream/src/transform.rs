@@ -35,11 +35,15 @@ pub enum LineEnding {
     Lf,
     /// Terminated by `\r\n`.
     CrLf,
-    /// The line exceeded the max-line cap. Under [`Overlong::Split`] this is a
-    /// forced piece with no terminator; under [`Overlong::Truncate`] it is the
-    /// kept prefix of the whole line.
+    /// The line exceeded the max-line cap.
+    /// 
+    /// If [`Overlong::Split`] was specified, this is a forced piece with no
+    /// terminator.
+    /// 
+    /// If [`Overlong::Truncate`] was specified, it is the kept prefix of the
+    /// whole line.
     Overlong,
-    /// The final line of the stream, with no terminator (emitted at flush).
+    /// The final line of the stream, with no terminator.
     Eof,
 }
 
@@ -119,9 +123,9 @@ pub enum Overwrite {
     Passthrough,
     /// Resolve `\r` rewrites within a physical line, keeping the final render.
     CollapseLine,
-    /// Resolve rewrites that span a few lines (cursor-up + erase). Not yet
-    /// implemented; currently behaves like [`Overwrite::CollapseLine`].
-    CollapseBlock,
+    // TODO: Implement this
+    // /// Resolve rewrites that span a few lines (cursor-up + erase).
+    // CollapseBlock,
 }
 
 /// How to handle invalid UTF-8 in the stream.
@@ -532,13 +536,12 @@ impl ByteFilter for Utf8Filter {
     }
 }
 
-/// Strips ANSI escape sequences from the stream, driven by [`vt_push_parser`].
+/// Strips ANSI escape sequences from the stream.
 ///
-/// Printable text and C0 controls (newlines, tabs, ...) pass through so later
-/// stages still see line structure. Escape sequences are dropped, except that
-/// [`Ansi::StripNonAttribute`] re-emits SGR (the `m` sequences that carry colour
-/// and attributes) verbatim. The parser is stateful across [`push`](ByteFilter::push)
-/// calls, so a sequence split over a read boundary is still recognised.
+/// Printable text and C0 controls (i.e.: newlines, tabs, ...) pass through so
+/// later stages still see line structure. Escape sequences are dropped, except
+/// that [`Ansi::StripNonAttribute`] re-emits SGR (the `m` sequences that carry
+/// colour and attributes) verbatim.
 pub struct AnsiFilter {
     parser: VTPushParser,
     keep_sgr: bool,
