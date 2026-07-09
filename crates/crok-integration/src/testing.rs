@@ -39,7 +39,7 @@ pub fn load_test_scripts(pattern: Option<&str>) -> Vec<TestCase> {
             .flatten()
         {
             let test_name = test.file_name().to_str().unwrap().to_owned();
-            if !test_name.ends_with(".cli") {
+            if !test_name.ends_with(".cli") && !test_name.ends_with(".crok") {
                 continue;
             }
             if let Some(pattern) = pattern
