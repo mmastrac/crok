@@ -1,5 +1,7 @@
 # procstream
 
+Make management of process trees and their output streams easy.
+
 Spawn background processes, capture their output as a stream of typed items, and
 kill the whole process tree across platforms.
 
@@ -14,36 +16,31 @@ own.
   `\r` overwrite collapse, UTF-8 sanitizing) terminated by a `Framer` that sets
   the output type. `Capture::lines()` yields `Line`s, `Capture::raw()` yields
   `Vec<u8>` byte runs, and a custom framer yields anything.
-- **Exit on the same queue**: a watcher thread reaps the child and delivers
-  `Event::Exit(status)` alongside the chunks, so one `recv` loop sees output,
-  exit, and end-of-stream with no polling. `wait`/`try_wait` still work.
+- **Inline exit events**: delivers `Event::Exit(status)` alongside the chunks,
+  so one `recv` loop sees output, exit, and end-of-stream with no polling.
 - **Tree-wide termination**: `signal(Signal::…)` sends a signal to the whole
   tree. Pair it with `try_wait`/`wait` to drive your own deadlines, or use the
   `shutdown(signal, grace)` convenience to escalate to SIGKILL. `job().clone()`
   gives a handle that can signal the tree from another thread.
 
-```rust
+```rust,no_run
 use std::process::Command;
 use std::time::Duration;
 use procstream::prelude::*;
 
-let mut cmd = Command::new("some-long-running-command");
-let (mut child, output) = cmd.spawn_job(Capture::lines())?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let mut cmd = Command::new("some-long-running-command");
+  let (mut child, output) = cmd.spawn_job(Capture::lines())?;
 
-for event in output.iter() {
-    match event {
-        // chunk.item is a Line, tagged with chunk.item.ending.
-        Event::Chunk(chunk) => println!("{:?}: {}", chunk.stream, chunk.item.as_str_lossy()),
-        Event::Exit(status) => println!("exited: {status}"),
-    }
+  for event in output.iter() {
+      match event {
+          // chunk.item is a Line, tagged with chunk.item.ending.
+          Event::Chunk(chunk) => println!("{:?}: {}", chunk.stream, chunk.item.as_str_lossy()),
+          Event::Exit(status) => println!("exited: {status}"),
+      }
+  }
+
+  let _status = child.shutdown(Signal::Terminate, Duration::from_secs(5))?;
+  Ok(())
 }
-
-let _status = child.shutdown(Signal::Terminate, Duration::from_secs(5))?;
 ```
-
-## Status
-
-Extracted from the process-management code in crok, stylus, and ssu. The
-readiness reactor (a thread-free, runtime-free capture backend built on
-`rustix`) is designed for but not yet implemented. It slots in behind `Output`
-without an API change.

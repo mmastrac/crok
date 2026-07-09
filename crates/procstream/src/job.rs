@@ -4,8 +4,6 @@
 //! places the child in a fresh isolation unit (a process group on Unix, a Job
 //! object on Windows) so that [`Job::signal`] and [`Child::shutdown`] act
 //! on the whole tree rather than just the immediate child.
-//!
-//! The platform bodies are lifted from crok's `ScriptKillReceiver::run_cmd`.
 
 use std::io;
 use std::process::{Command, ExitStatus};
