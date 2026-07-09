@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+default-members = ["crates/crok", "crates/crok-integration", "crates/crok-lib"]
 
 [workspace.package]
 version = "0.8.1" # Update versions below as well

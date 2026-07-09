@@ -1,0 +1,3 @@
+#!/usr/bin/env crok --v0
+$ printf "Hello, World!\n"
+! Hello, World!

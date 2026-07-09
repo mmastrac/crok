@@ -1,0 +1,18 @@
+#!/usr/bin/env crok --v0
+# A bare file should work (and not print "PWD does not exist")
+
+reject {
+    ? .*PWD.*
+}
+
+$ cargo run --quiet -- data/hello_world.crok
+*
+! Hello, World!
+*
+
+cd "data";
+
+$ cargo run --quiet -- hello_world.crok
+*
+! Hello, World!
+*
