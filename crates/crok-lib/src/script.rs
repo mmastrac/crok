@@ -161,8 +161,15 @@ impl ScriptEnv {
             ]
         );
 
+        // Empty string -> current directory
+        let pwd = if pwd.as_ref().as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            pwd.as_ref()
+        };
+
         // Set the current working directory as a special variable "PWD"
-        let pwd = NicePathBuf::from(pwd.as_ref()).env_string();
+        let pwd = NicePathBuf::from(pwd).env_string();
         self.env_vars.insert("PWD".to_string(), pwd);
         // Save the initial PWD as INITIAL_PWD so it can easily be restored
         self.env_vars
@@ -587,7 +594,10 @@ impl ScriptKillSender {
 impl ScriptRunContext {
     pub fn new(args: ScriptRunArgs, script_path: impl AsRef<Path>, output: ScriptOutput) -> Self {
         let mut env = ScriptEnv::default();
-        env.set_defaults(script_path.as_ref().parent().unwrap());
+
+        // `Path::parent()` returns `Some("")` for a bare filename (e.g. `test.crok`)
+        let script_parent = script_path.as_ref().parent().unwrap_or(Path::new(""));
+        env.set_defaults(script_parent);
 
         let kill = Arc::new(AtomicBool::new(false));
 
