@@ -5,9 +5,8 @@
 //! the transform's output type: `Vec<u8>` for raw byte runs, [`Line`](crate::Line)
 //! for framed lines, or any framer's item.
 //!
-//! On kqueue/epoll platforms the queue is fed by an inline driver that the
-//! consumer advances itself; elsewhere a reader thread feeds it. Either way the
-//! [`Output`] API is the same.
+//! On kqueue/epoll platforms an inline driver feeds the queue. Elsewhere a
+//! reader thread does. The [`Output`] API is the same either way.
 
 use std::io::Read;
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
@@ -18,64 +17,48 @@ use std::time::{Duration, Instant};
 
 use crate::transform::{Pipeline, Transform};
 
-/// A type-erased handle to whatever advances a child's capture: the inline
-/// driver on kqueue/epoll platforms, absent on the thread backend (its threads
-/// advance themselves). Erasing the driver type keeps [`Output`] and
-/// [`Child`](crate::Child) one shape on every platform, and free of `T`.
+/// Type-erased capture advancer. Present on kqueue/epoll, `None` on the thread
+/// backend. Keeps [`Output`] and [`Child`](crate::Child) one shape, free of `T`.
 pub(crate) trait Advance: Send {
-    /// Wait up to `timeout` for readiness, then service whatever is ready.
     fn poll_once(&mut self, timeout: Option<Duration>);
-    /// Every stream is closed and the exit delivered: nothing left to do.
     fn is_done(&self) -> bool;
 }
 
-/// Shared, type-erased driver handle. `None` on the thread backend.
 pub(crate) type DriverHandle = Option<Arc<Mutex<dyn Advance>>>;
 
-/// Which standard stream a chunk came from.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Stream {
     Stdout,
     Stderr,
 }
 
-/// One unit of captured output: the transform's output `item`, tagged with the
-/// stream it came from.
+/// One unit of captured output, tagged with the stream it came from.
 #[derive(Clone, Debug)]
 pub struct Chunk<T> {
     pub stream: Stream,
     pub item: T,
 }
 
-/// One event on the [`Output`] queue.
 #[derive(Clone, Debug)]
 pub enum Event<T> {
-    /// A unit of captured output.
     Chunk(Chunk<T>),
-    /// The leader process exited (and has been reaped).
-    ///
-    /// This is not end-of-stream, and it is not ordered last. Trailing chunks
-    /// can arrive after it. Continue reading until the queue closes.
+    /// Leader exited (and has been reaped). Not end-of-stream and not ordered
+    /// last: trailing chunks can still arrive. Drain until the queue closes.
     Exit(ExitStatus),
 }
 
-/// The error returned by [`Output::recv_timeout`].
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RecvTimeout {
-    /// No event arrived within the timeout.
     Timeout,
-    /// The queue has closed; no more events will ever arrive.
     Closed,
 }
 
-/// A queue of [`Event`]s from a child: captured chunks plus its exit.
+/// Queue of [`Event`]s from a child. Closes once every capturing stream has hit
+/// EOF and the exit has been delivered.
 ///
-/// The queue closes once every capturing stream has hit EOF and the exit has
-/// been delivered, so a consumer that drains it to the end has seen everything.
-///
-/// With an inline driver there is no capture thread: each `recv` locks the
-/// shared driver and advances it just enough to serve the call. On the thread
-/// backend `driver` is `None` and `recv` simply blocks on the queue.
+/// With an inline driver, each `recv` advances the shared driver just enough to
+/// serve the call. On the thread backend `driver` is `None` and `recv` blocks
+/// on the queue.
 pub struct Output<T> {
     rx: Receiver<Event<T>>,
     driver: DriverHandle,
@@ -86,7 +69,7 @@ impl<T> Output<T> {
         Output { rx, driver }
     }
 
-    /// Block until the next event, or return `None` once the queue has closed.
+    /// Block until the next event, or `None` once the queue has closed.
     pub fn recv(&self) -> Option<Event<T>> {
         match &self.driver {
             Some(driver) => self.drive(driver, None).ok(),
@@ -94,7 +77,6 @@ impl<T> Output<T> {
         }
     }
 
-    /// Block for up to `timeout` for the next event.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Event<T>, RecvTimeout> {
         match &self.driver {
             Some(driver) => self.drive(driver, Instant::now().checked_add(timeout)),
@@ -108,13 +90,12 @@ impl<T> Output<T> {
         }
     }
 
-    /// Iterate events until the queue closes.
     pub fn iter(&self) -> impl Iterator<Item = Event<T>> + '_ {
         std::iter::from_fn(move || self.recv())
     }
 
-    /// Serve one event, advancing the driver until an event is buffered, the
-    /// queue closes, or `deadline` passes. `None` means block indefinitely.
+    /// Advance the driver until an event is buffered, the queue closes, or
+    /// `deadline` passes. `None` means block indefinitely.
     fn drive(
         &self,
         driver: &Arc<Mutex<dyn Advance>>,
@@ -129,7 +110,7 @@ impl<T> Output<T> {
             }
             let mut driver = driver.lock().unwrap();
             if driver.is_done() {
-                // Finalize dropped the senders; drain any last buffered event.
+                // Finalize dropped the senders. Drain any last buffered event.
                 drop(driver);
                 return self.rx.try_recv().map_err(|_| RecvTimeout::Closed);
             }
@@ -148,13 +129,9 @@ impl<T> Output<T> {
     }
 }
 
-/// How a single output stream (stdout or stderr) is captured.
 pub enum Sink<T> {
-    /// Discard the stream.
     Null,
-    /// Inherit the parent's stream.
     Inherit,
-    /// Pipe the stream through `transform` and deliver it as items.
     Piped(Transform<T>),
 }
 
@@ -178,12 +155,10 @@ impl<T> Sink<T> {
     }
 }
 
-/// How the child's stdin is wired.
 #[derive(Copy, Clone)]
 pub enum Stdin {
     Null,
     Inherit,
-    /// Keep a handle so the caller can write to the child.
     Piped,
 }
 
@@ -197,9 +172,7 @@ impl Stdin {
     }
 }
 
-/// What [`Capture::start`] hands back to `spawn_job`: the queue, the reader
-/// threads, the piped stdin, and a sender for the exit watcher. Dead on the
-/// driver backend, which reads without threads.
+/// What [`Capture::start`] hands back. Dead on the driver backend.
 #[allow(dead_code)]
 pub(crate) type Started<T> = (
     Output<T>,
@@ -208,7 +181,6 @@ pub(crate) type Started<T> = (
     Sender<Event<T>>,
 );
 
-/// Describes how all three of a child's standard streams are captured.
 pub struct Capture<T> {
     pub stdout: Sink<T>,
     pub stderr: Sink<T>,
@@ -226,16 +198,13 @@ impl<T> Clone for Capture<T> {
 }
 
 impl Capture<crate::Line> {
-    /// Frame both stdout and stderr into [`Line`](crate::Line)s with the
-    /// default transform, stdin discarded. Shorthand for
-    /// `Capture::piped(Transform::builder().lines())`.
+    /// Shorthand for `Capture::piped(Transform::builder().lines())`.
     pub fn lines() -> Self {
         Capture::piped(Transform::builder().lines())
     }
 }
 
 impl Capture<Vec<u8>> {
-    /// Deliver both stdout and stderr as raw byte runs, stdin discarded.
     /// Shorthand for `Capture::piped(Transform::raw())`.
     pub fn raw() -> Self {
         Capture::piped(Transform::raw())
@@ -243,7 +212,6 @@ impl Capture<Vec<u8>> {
 }
 
 impl<T: Send + 'static> Capture<T> {
-    /// Pipe both stdout and stderr through `transform`, with stdin discarded.
     pub fn piped(transform: Transform<T>) -> Self {
         Capture {
             stdout: Sink::Piped(transform.clone()),
@@ -252,7 +220,6 @@ impl<T: Send + 'static> Capture<T> {
         }
     }
 
-    /// Start building a capture with each stream discarded.
     pub fn builder() -> CaptureBuilder<T> {
         CaptureBuilder {
             capture: Capture {
@@ -263,18 +230,15 @@ impl<T: Send + 'static> Capture<T> {
         }
     }
 
-    /// Apply the stdio configuration to `command` before it is spawned.
     pub(crate) fn apply(&self, command: &mut Command) {
         command.stdout(self.stdout.to_stdio());
         command.stderr(self.stderr.to_stdio());
         command.stdin(self.stdin.to_stdio());
     }
 
-    /// Take the piped handles off a freshly-spawned child and start the reader
-    /// threads that feed the returned [`Output`]. The returned sender is for
-    /// the exit watcher; the queue closes once it and every reader are done.
-    /// Dead on the driver backend, which reads without threads.
-    #[allow(dead_code)]
+    /// Start reader threads that feed the returned [`Output`]. The sender is
+    /// for the exit watcher. The queue closes once it and every reader are done.
+    #[allow(dead_code)] // Dead on the driver backend.
     pub(crate) fn start(&self, child: &mut std::process::Child) -> Started<T> {
         let (tx, rx) = channel();
         let mut readers = Vec::new();
@@ -293,7 +257,6 @@ impl<T: Send + 'static> Capture<T> {
     }
 }
 
-/// Builder for a [`Capture`].
 pub struct CaptureBuilder<T> {
     capture: Capture<T>,
 }
@@ -334,18 +297,13 @@ impl<T> CaptureBuilder<T> {
     }
 }
 
-/// A type-erased consumer of one stream's bytes: run them through a pipeline
-/// and deliver the framed items.
-#[allow(dead_code)]
+#[allow(dead_code)] // Only used by the driver backend.
 pub(crate) trait StreamSink: Send {
-    /// Feed a run of bytes just read from the stream.
     fn on_read(&mut self, bytes: &[u8]);
-    /// The stream hit EOF: flush any buffered item.
     fn on_eof(&mut self);
 }
 
-/// The concrete sink: a pipeline whose items go onto a child's [`Output`] queue.
-#[allow(dead_code)]
+#[allow(dead_code)] // Only used by the driver backend.
 struct PipeSink<T> {
     pipeline: Pipeline<T>,
     tx: Sender<Event<T>>,
@@ -366,8 +324,6 @@ impl<T: Send + 'static> StreamSink for PipeSink<T> {
     }
 }
 
-/// What [`Capture::build_streams`] hands back: the queue receiver, the read fds
-/// paired with their sinks, the piped stdin, and a sender for the exit event.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) type StreamParts<T> = (
     Receiver<Event<T>>,
@@ -378,8 +334,7 @@ pub(crate) type StreamParts<T> = (
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl<T: Send + 'static> Capture<T> {
-    /// Take the piped read ends off a freshly-spawned child and pair each with
-    /// a sink, for the driver to read. No threads are spawned here.
+    /// Pair each piped read end with a sink for the driver. No threads.
     pub(crate) fn build_streams(&self, child: &mut std::process::Child) -> StreamParts<T> {
         use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 
@@ -396,8 +351,7 @@ impl<T: Send + 'static> Capture<T> {
 
         if let Sink::Piped(transform) = &self.stdout {
             let stdout = child.stdout.take().expect("stdout was piped");
-            // into_raw_fd relinquishes std's ownership; we re-own it as an fd
-            // the driver will read and close.
+            // Relinquish std's ownership. The driver reads and closes the fd.
             let fd = unsafe { OwnedFd::from_raw_fd(stdout.into_raw_fd()) };
             streams.push((fd, sink_for(transform, Stream::Stdout)));
         }
@@ -412,10 +366,7 @@ impl<T: Send + 'static> Capture<T> {
     }
 }
 
-// Spawn a reader thread that reads `reader` to EOF, runs each read through a
-// fresh pipeline built from `transform`, and sends every resulting item on `tx`.
-// Dead on the driver backend, which reads without threads.
-#[allow(dead_code)]
+#[allow(dead_code)] // Dead on the driver backend.
 fn pump<R, T>(
     mut reader: R,
     stream: Stream,

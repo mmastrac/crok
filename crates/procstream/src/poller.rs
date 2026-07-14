@@ -1,19 +1,13 @@
-//! Platform readiness for the driver: one wait point over a child's fds. macOS
-//! rides kqueue, Linux rides epoll.
+//! Platform readiness for the driver: one wait point over a child's fds
+//! (kqueue on macOS, epoll on Linux).
 //!
-//! The poller only reports readiness. Reads, transforms, and reaping happen in
-//! the driver above it, so this layer stays non-generic and platform-local.
-//!
-//! There is no wakeup source: the driver is advanced only by its owner's own
-//! `recv`/`wait` calls, and killing the child from another thread wakes a
-//! blocking wait through the exit event itself.
+//! Reports readiness only. Reads, transforms, and reaping stay in the driver.
+//! There is no wakeup source: the driver advances only from its owner's
+//! `recv`/`wait`, and killing the child wakes a blocking wait via the exit event.
 
-/// One thing the poller observed during a wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ready {
-    /// A registered read fd has data or has hit EOF. The driver reads it.
     Readable(u64),
-    /// A registered process has exited. The driver reaps it.
     Exited(u64),
 }
 
@@ -34,12 +28,11 @@ mod imp {
         token as usize as *mut core::ffi::c_void
     }
 
-    // Apply a changelist without waiting: a zero-capacity eventlist makes
-    // `kevent` return as soon as the changes are registered.
+    // Zero-capacity eventlist: kevent returns as soon as changes are registered.
     fn apply(kq: &OwnedFd, changes: &[Event]) -> io::Result<()> {
         let mut empty: Vec<Event> = Vec::new();
-        // SAFETY: every fd named in `changes` is owned by the driver and is
-        // removed from the kqueue before it is closed.
+        // SAFETY: every fd in `changes` is owned by the driver and removed
+        // from the kqueue before it is closed.
         unsafe { kevent(kq, changes, &mut empty, Some(Duration::ZERO))? };
         Ok(())
     }
@@ -88,15 +81,14 @@ mod imp {
             );
             match apply(&self.kq, &[ev]) {
                 Ok(()) => Ok(true),
-                // The process is already gone; the driver reaps it directly.
+                // Already gone. Driver reaps directly.
                 Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(false),
                 Err(e) => Err(e),
             }
         }
 
         pub(crate) fn remove_process(&mut self, _token: u64) {
-            // EVFILT_PROC deletes itself when the process exits, so once we have
-            // seen the exit there is nothing left to remove.
+            // EVFILT_PROC deletes itself when the process exits.
         }
 
         pub(crate) fn wait(
@@ -141,8 +133,7 @@ mod imp {
 
     pub(crate) struct Poller {
         epfd: OwnedFd,
-        // Tokens whose readiness means a process exit, mapped to the pidfd we
-        // keep alive for the registration.
+        // Token -> pidfd kept alive for the registration.
         pidfds: HashMap<u64, OwnedFd>,
     }
 
@@ -172,7 +163,7 @@ mod imp {
             };
             let pidfd = match pidfd_open(pid, PidfdFlags::empty()) {
                 Ok(fd) => fd,
-                // The process is already gone; the driver reaps it directly.
+                // Already gone. Driver reaps directly.
                 Err(e) if e.raw_os_error() == libc::ESRCH => return Ok(false),
                 Err(e) => return Err(e.into()),
             };
@@ -228,8 +219,7 @@ mod tests {
         poller.wait(&mut out, Some(Duration::from_secs(5))).unwrap();
         assert!(out.contains(&Ready::Readable(7)));
 
-        // Drain, then the write end closing shows up as another readable that
-        // reads zero bytes (EOF).
+        // Write-end close shows up as another readable that reads as EOF.
         use std::io::Read;
         let mut buf = [0u8; 8];
         let _ = rd.read(&mut buf);
@@ -242,9 +232,8 @@ mod tests {
 
     #[test]
     fn process_exit_reports_exited() {
-        // The brief sleep keeps the child alive across registration, so it must
-        // take; a bare `exit 0` could be gone first, and a process already gone
-        // registers as false (the driver reaps it directly instead).
+        // Sleep keeps the child alive across registration. A bare `exit 0`
+        // can be gone first, and add_process then returns false.
         let mut child = std::process::Command::new("sh")
             .arg("-c")
             .arg("sleep 0.2")
@@ -261,7 +250,6 @@ mod tests {
         child.wait().unwrap();
     }
 
-    // A minimal pipe pair for the tests, avoiding an extra dependency.
     mod os_pipe {
         use std::fs::File;
         use std::os::fd::FromRawFd;

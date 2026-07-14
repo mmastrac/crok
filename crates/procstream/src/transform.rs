@@ -1,17 +1,13 @@
 //! Streaming byte transforms applied to a single captured stream.
 //!
-//! A [`Transform<T>`] is a factory: it records an ordered set of byte pre-stages
-//! and a terminal *framer*, and mints a fresh [`Pipeline<T>`] of stateful filters
-//! for each stream it is attached to, so one `Transform` can be reused across
-//! many spawns.
+//! A [`Transform<T>`] records byte pre-stages and a terminal [`Framer`], and
+//! builds a fresh [`Pipeline<T>`] per attached stream so one recipe can be
+//! reused across spawns.
 //!
-//! A pipeline has two halves. The pre-stages ([`ByteFilter`]s for ANSI stripping,
-//! `\r` overwrite collapse, UTF-8 sanitizing) are byte-to-byte and run in a fixed
-//! order regardless of builder call order: `ansi`, then `overwrite`, then `utf8`.
-//! The terminal stage is a [`Framer`], which turns the byte stream into items of
-//! its chosen `Item` type, the transform's output type. `lines()` produces
-//! [`Line`]s, the default produces `Vec<u8>` byte runs, and `frame()` lets you
-//! plug in any framer of your own.
+//! Pre-stages ([`ByteFilter`]s) always run in fixed order regardless of builder
+//! call order: `ansi`, then `overwrite`, then `utf8`. The framer sets the output
+//! type (`lines()` → [`Line`], default → `Vec<u8>`, or `frame()` for a custom
+//! framer).
 
 use std::sync::Arc;
 
@@ -21,120 +17,81 @@ use vt_push_parser::event::VTEvent;
 const CR: u8 = b'\r';
 const LF: u8 = b'\n';
 
-/// The default cap on a single un-terminated line, used as a safety valve so a
-/// stream that never emits a newline cannot grow the buffer without bound.
+/// Cap on an un-terminated line so a stream without newlines cannot grow forever.
 const DEFAULT_MAX_LINE: usize = 1 << 20;
 
-/// The Unicode replacement character, `U+FFFD`, as UTF-8 bytes.
 const REPLACEMENT: &[u8] = "\u{FFFD}".as_bytes();
 
-/// How a framed line was terminated.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LineEnding {
-    /// Terminated by `\n`.
     Lf,
-    /// Terminated by `\r\n`.
     CrLf,
-    /// The line exceeded the max-line cap.
-    /// 
-    /// If [`Overlong::Split`] was specified, this is a forced piece with no
-    /// terminator.
-    /// 
-    /// If [`Overlong::Truncate`] was specified, it is the kept prefix of the
-    /// whole line.
+    /// Exceeded the max-line cap: a forced piece under [`Overlong::Split`], or
+    /// the kept prefix under [`Overlong::Truncate`].
     Overlong,
-    /// The final line of the stream, with no terminator.
     Eof,
 }
 
-/// What the line framer does with a line that exceeds the max-line cap.
+/// Policy when a framed line exceeds the max-line cap.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Overlong {
-    /// Keep the first cap bytes and drop the rest, delivering one line tagged
-    /// [`LineEnding::Overlong`]. The default.
+    /// Keep the first cap bytes as one [`LineEnding::Overlong`] line. Default.
     Truncate,
-    /// Deliver the whole line in cap-sized pieces, each tagged
-    /// [`LineEnding::Overlong`] except the last, which carries the real
-    /// terminator. Lossless, but the consumer must stitch the pieces.
+    /// Cap-sized pieces tagged [`LineEnding::Overlong`], last with the real
+    /// terminator. Consumer must stitch.
     Split,
 }
 
-/// A single framed line, the output type of the [`TransformBuilder::lines`]
-/// framer.
+/// Framed line from [`TransformBuilder::lines`]: bytes without the terminator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
-    /// The line's bytes, without the terminator.
     pub bytes: Vec<u8>,
-    /// How the line was terminated.
     pub ending: LineEnding,
 }
 
 impl Line {
-    /// The line's bytes as a lossily-decoded string.
     pub fn as_str_lossy(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.bytes)
     }
 
-    /// The line's bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
 
-/// A byte-to-byte pre-stage of a pipeline.
 pub trait ByteFilter: Send {
-    /// Feed `bytes` through the filter, invoking `out` with any complete output.
     fn push(&mut self, bytes: &[u8], out: &mut dyn FnMut(&[u8]));
-
-    /// Flush any buffered state at end-of-stream.
     fn flush(&mut self, out: &mut dyn FnMut(&[u8]));
 }
 
-/// The terminal stage of a pipeline: turns the byte stream into items of type
-/// [`Framer::Item`]. This is where a transform's output type is set.
+/// Terminal stage of a pipeline. Its [`Framer::Item`] is the transform output type.
 pub trait Framer: Send {
-    /// The output type this framer produces.
     type Item;
-
-    /// Feed `bytes` through the framer, invoking `out` with each complete item.
     fn push(&mut self, bytes: &[u8], out: &mut dyn FnMut(Self::Item));
-
-    /// Flush any buffered state at end-of-stream.
     fn flush(&mut self, out: &mut dyn FnMut(Self::Item));
 }
 
-/// How to handle ANSI escape sequences in the stream.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Ansi {
-    /// Leave every escape sequence in place.
     Keep,
-    /// Strip every escape sequence, leaving only printable text.
     StripAll,
-    /// Strip motion, erase, and OSC sequences but keep SGR (colour/attribute)
-    /// sequences verbatim.
+    /// Drop motion/erase/OSC. Keep SGR (colour/attribute) sequences.
     StripNonAttribute,
 }
 
-/// How to handle in-place line rewrites (carriage returns, spinners, progress
-/// bars).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Overwrite {
-    /// Pass carriage returns through untouched.
     Passthrough,
-    /// Resolve `\r` rewrites within a physical line, keeping the final render.
+    /// Resolve `\r` rewrites within a physical line to the final render.
     CollapseLine,
-    // TODO: Implement this
-    // /// Resolve rewrites that span a few lines (cursor-up + erase).
-    // CollapseBlock,
+    // TODO: CollapseBlock (cursor-up + erase across a few lines)
 }
 
-/// How to handle invalid UTF-8 in the stream.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Utf8 {
-    /// Deliver bytes exactly as produced, valid UTF-8 or not.
     Preserve,
-    /// Replace invalid UTF-8 sequences with `U+FFFD`, buffering an incomplete
-    /// sequence that straddles a read boundary rather than mangling it.
+    /// Replace invalid sequences with `U+FFFD`. Buffer an incomplete sequence
+    /// that straddles a read boundary.
     Lossy,
 }
 
@@ -151,7 +108,6 @@ impl ByteStage {
             ByteStage::Ansi(Ansi::Keep) => None,
             ByteStage::Ansi(mode) => Some(Box::new(AnsiFilter::new(*mode))),
             ByteStage::Overwrite(Overwrite::Passthrough) => None,
-            // CollapseBlock is not implemented yet, so fall back to per-line collapse.
             ByteStage::Overwrite(_) => Some(Box::new(CollapseLine::default())),
             ByteStage::Utf8(Utf8::Preserve) => None,
             ByteStage::Utf8(Utf8::Lossy) => Some(Box::new(Utf8Filter::default())),
@@ -161,11 +117,7 @@ impl ByteStage {
 
 type FramerFactory<T> = Arc<dyn Fn() -> Box<dyn Framer<Item = T>> + Send + Sync>;
 
-/// An ordered, reusable recipe for transforming a captured stream into items of
-/// type `T`.
-///
-/// Build one with [`Transform::raw`] for raw byte runs or [`Transform::builder`]
-/// for the staged form.
+/// Reusable recipe for transforming a captured stream into items of type `T`.
 pub struct Transform<T = Vec<u8>> {
     stages: Vec<ByteStage>,
     framer: FramerFactory<T>,
@@ -181,19 +133,16 @@ impl<T> Clone for Transform<T> {
 }
 
 impl Transform {
-    /// Start building a staged transform.
     pub fn builder() -> TransformBuilder {
         TransformBuilder::default()
     }
 
-    /// A passthrough transform that delivers raw byte runs unchanged.
     pub fn raw() -> Transform<Vec<u8>> {
         TransformBuilder::default().raw()
     }
 }
 
 impl<T> Transform<T> {
-    /// Mint a fresh pipeline with its own per-stream state.
     pub(crate) fn build(&self) -> Pipeline<T> {
         Pipeline {
             byte_stages: self.stages.iter().filter_map(|s| s.build()).collect(),
@@ -202,9 +151,7 @@ impl<T> Transform<T> {
     }
 }
 
-/// Builder for the byte pre-stages of a [`Transform`]. Terminal methods
-/// ([`lines`](TransformBuilder::lines), [`raw`](TransformBuilder::raw),
-/// [`frame`](TransformBuilder::frame)) choose the framer and fix the output type.
+/// Builder for [`Transform`] pre-stages. Terminal methods choose the framer.
 #[derive(Default)]
 pub struct TransformBuilder {
     ansi: Option<Ansi>,
@@ -230,14 +177,13 @@ impl TransformBuilder {
         self
     }
 
-    /// Cap a single framed line at `max` bytes. Defaults to 1 MiB. What
-    /// happens past the cap is set by [`overlong`](TransformBuilder::overlong).
+    /// Cap a framed line at `max` bytes (default 1 MiB). See [`overlong`](Self::overlong).
     pub fn max_line(mut self, max: usize) -> Self {
         self.max_line = Some(max);
         self
     }
 
-    /// What to do with a line past the cap. Defaults to [`Overlong::Truncate`].
+    /// Policy past the max-line cap. Defaults to [`Overlong::Truncate`].
     pub fn overlong(mut self, policy: Overlong) -> Self {
         self.overlong = Some(policy);
         self
@@ -257,7 +203,7 @@ impl TransformBuilder {
         stages
     }
 
-    /// Frame the stream into [`Line`]s on `\n`, stripping a trailing `\r`.
+    /// Frame into [`Line`]s on `\n`, stripping a trailing `\r`.
     pub fn lines(self) -> Transform<Line> {
         let max = self.max_line.unwrap_or(DEFAULT_MAX_LINE);
         let policy = self.overlong.unwrap_or(Overlong::Truncate);
@@ -269,7 +215,6 @@ impl TransformBuilder {
         }
     }
 
-    /// Deliver raw byte runs with no framing.
     pub fn raw(self) -> Transform<Vec<u8>> {
         Transform {
             stages: self.stages(),
@@ -277,8 +222,7 @@ impl TransformBuilder {
         }
     }
 
-    /// Terminate with a framer of your own, setting the output type to its
-    /// [`Framer::Item`]. `make` constructs a fresh framer for each stream.
+    /// Custom framer. `make` builds a fresh one per stream.
     pub fn frame<F>(self, make: impl Fn() -> F + Send + Sync + 'static) -> Transform<F::Item>
     where
         F: Framer + 'static,
@@ -290,14 +234,12 @@ impl TransformBuilder {
     }
 }
 
-/// A built chain of per-stream byte filters plus a terminal framer.
 pub(crate) struct Pipeline<T> {
     byte_stages: Vec<Box<dyn ByteFilter>>,
     framer: Box<dyn Framer<Item = T>>,
 }
 
 impl<T> Pipeline<T> {
-    /// Push bytes through the whole chain, invoking `out` once per final item.
     pub(crate) fn push(&mut self, bytes: &[u8], out: &mut dyn FnMut(T)) {
         let Self {
             byte_stages,
@@ -306,7 +248,6 @@ impl<T> Pipeline<T> {
         run_bytes(byte_stages, bytes, &mut |b| framer.push(b, out));
     }
 
-    /// Flush every stage in order at end-of-stream.
     pub(crate) fn flush(&mut self, out: &mut dyn FnMut(T)) {
         let Self {
             byte_stages,
@@ -317,8 +258,6 @@ impl<T> Pipeline<T> {
     }
 }
 
-// Feed `bytes` into the first byte filter, chaining each of its outputs into the
-// rest of the chain. An empty chain passes bytes straight to `sink` (the framer).
 fn run_bytes(stages: &mut [Box<dyn ByteFilter>], bytes: &[u8], sink: &mut dyn FnMut(&[u8])) {
     match stages.split_first_mut() {
         None => sink(bytes),
@@ -326,8 +265,6 @@ fn run_bytes(stages: &mut [Box<dyn ByteFilter>], bytes: &[u8], sink: &mut dyn Fn
     }
 }
 
-// Flush the first byte filter (routing its residue through the rest), then flush
-// the rest.
 fn flush_bytes(stages: &mut [Box<dyn ByteFilter>], sink: &mut dyn FnMut(&[u8])) {
     if let Some((first, rest)) = stages.split_first_mut() {
         first.flush(&mut |b| run_bytes(rest, b, sink));
@@ -335,7 +272,6 @@ fn flush_bytes(stages: &mut [Box<dyn ByteFilter>], sink: &mut dyn FnMut(&[u8])) 
     }
 }
 
-/// The framer for raw output: emits each byte run as an owned `Vec<u8>`.
 struct RawFramer;
 
 impl Framer for RawFramer {
@@ -350,12 +286,7 @@ impl Framer for RawFramer {
     fn flush(&mut self, _out: &mut dyn FnMut(Vec<u8>)) {}
 }
 
-/// Frames the stream into [`Line`]s on `\n`, stripping a trailing `\r`, and
-/// tagging each with the [`LineEnding`] it saw.
-///
-/// Lines past the `max` cap are truncated or split per the [`Overlong`]
-/// policy, so a stream that never emits a newline cannot grow the buffer
-/// without bound.
+/// Frames on `\n` (strips trailing `\r`). Caps via [`Overlong`].
 pub struct LineFramer {
     buf: Vec<u8>,
     max: usize,
@@ -384,8 +315,6 @@ impl Framer for LineFramer {
                     self.truncated = false;
                     LineEnding::Overlong
                 } else if self.buf.last() == Some(&CR) {
-                    // Strip a trailing CR so CRLF collapses to a bare line,
-                    // and record which ending we saw.
                     self.buf.pop();
                     LineEnding::CrLf
                 } else {
@@ -397,7 +326,6 @@ impl Framer for LineFramer {
                 });
             } else if self.buf.len() == self.max {
                 match self.policy {
-                    // Drop the byte, keeping the prefix already buffered.
                     Overlong::Truncate => self.truncated = true,
                     Overlong::Split => {
                         out(Line {
@@ -414,8 +342,7 @@ impl Framer for LineFramer {
     }
 
     fn flush(&mut self, out: &mut dyn FnMut(Line)) {
-        // A bare trailing CR on the final unterminated line is a rewrite
-        // artifact (a progress bar parked mid-line), not content.
+        // Trailing CR on an unterminated line is a rewrite artifact, not content.
         if self.buf.last() == Some(&CR) {
             self.buf.pop();
         }
@@ -434,15 +361,12 @@ impl Framer for LineFramer {
     }
 }
 
-/// Resolves `\r` rewrites within a physical line, keeping the final render.
+/// Resolves `\r` rewrites within a physical line to the final render.
 ///
-/// `\r` resets the write cursor to column zero; subsequent bytes overwrite in
-/// place and extend the line if they run past the previous end (longest write
-/// wins on the tail). `\n` commits the rendered line, terminator included, so a
-/// following framer can still see the newline.
-///
-/// The cursor is a byte index, which is fine for ASCII progress bars; a
-/// multi-byte overwrite that lands mid-character can tear.
+/// `\r` resets the cursor to column 0. Later bytes overwrite in place (longest
+/// write wins on the tail). `\n` commits the line including the terminator.
+/// Cursor is a byte index -- fine for ASCII progress bars. Mid-character
+/// multi-byte overwrites can tear.
 #[derive(Default)]
 pub struct CollapseLine {
     line: Vec<u8>,
@@ -481,9 +405,7 @@ impl ByteFilter for CollapseLine {
     }
 }
 
-/// Replaces invalid UTF-8 with `U+FFFD`, buffering an incomplete sequence that
-/// straddles a read boundary so a multi-byte character split across two reads is
-/// reassembled rather than mangled.
+/// Replaces invalid UTF-8 with `U+FFFD`. Buffers a sequence split across reads.
 #[derive(Default)]
 pub struct Utf8Filter {
     pending: Vec<u8>,
@@ -507,12 +429,10 @@ impl ByteFilter for Utf8Filter {
                     sanitized.extend_from_slice(&self.pending[start..start + valid]);
                     match e.error_len() {
                         Some(len) => {
-                            // A complete invalid sequence: replace and continue.
                             sanitized.extend_from_slice(REPLACEMENT);
                             start += valid + len;
                         }
                         None => {
-                            // An incomplete tail: keep it for the next read.
                             start += valid;
                             break;
                         }
@@ -528,7 +448,6 @@ impl ByteFilter for Utf8Filter {
     }
 
     fn flush(&mut self, out: &mut dyn FnMut(&[u8])) {
-        // Anything left is an incomplete sequence at end-of-stream.
         if !self.pending.is_empty() {
             out(REPLACEMENT);
             self.pending.clear();
@@ -536,12 +455,8 @@ impl ByteFilter for Utf8Filter {
     }
 }
 
-/// Strips ANSI escape sequences from the stream.
-///
-/// Printable text and C0 controls (i.e.: newlines, tabs, ...) pass through so
-/// later stages still see line structure. Escape sequences are dropped, except
-/// that [`Ansi::StripNonAttribute`] re-emits SGR (the `m` sequences that carry
-/// colour and attributes) verbatim.
+/// Strips ANSI escapes. C0 controls pass through for line structure.
+/// [`Ansi::StripNonAttribute`] keeps SGR (`m`) sequences.
 pub struct AnsiFilter {
     parser: VTPushParser,
     keep_sgr: bool,
@@ -556,16 +471,12 @@ impl AnsiFilter {
     }
 }
 
-// Forward the bytes of one event to `out`, keeping only text, C0 controls, and
-// (when asked) SGR sequences.
 fn strip_event(event: VTEvent, keep_sgr: bool, out: &mut dyn FnMut(&[u8])) {
     match event {
         VTEvent::Raw(text) => out(text),
         VTEvent::C0(b) => out(&[b]),
         VTEvent::Csi(csi) if keep_sgr && csi.final_byte == b'm' => {
             let event = VTEvent::Csi(csi);
-            // Re-encode into a stack buffer, falling back to the heap for an
-            // unusually long parameter list.
             let mut buf = [0u8; 64];
             match event.encode(&mut buf) {
                 Ok(n) => out(&buf[..n]),
@@ -599,7 +510,6 @@ impl ByteFilter for AnsiFilter {
 mod tests {
     use super::*;
 
-    // Collect a byte filter's emitted chunks as strings.
     fn byte_out(mut filter: impl ByteFilter, input: &str) -> Vec<String> {
         let mut out = Vec::new();
         filter.push(input.as_bytes(), &mut |b| {
@@ -609,7 +519,6 @@ mod tests {
         out
     }
 
-    // Run a whole transform and collect its typed output items.
     fn run_transform<T>(transform: &Transform<T>, input: &str) -> Vec<T> {
         let mut pipeline = transform.build();
         let mut out = Vec::new();
@@ -645,7 +554,6 @@ mod tests {
         let long = "0123456789".repeat(6); // 60 chars, cap is 40
         let t = Transform::builder().lines();
         let out = run_transform(&t, &long);
-        // DEFAULT_MAX_LINE is huge, so use a direct framer for the cap test.
         let mut framer = LineFramer::new(40, Overlong::Split);
         let mut lines = Vec::new();
         framer.push(long.as_bytes(), &mut |l| lines.push(l));
@@ -655,7 +563,6 @@ mod tests {
         assert_eq!(lines[0].bytes.len(), 40);
         assert_eq!(lines[1].ending, LineEnding::Eof);
         assert_eq!(lines[1].bytes.len(), 20);
-        // The transform (with the default 1 MiB cap) sees one Eof line.
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].ending, LineEnding::Eof);
     }
@@ -670,7 +577,6 @@ mod tests {
             .iter()
             .map(|l| (l.as_str_lossy().into_owned(), l.ending))
             .collect();
-        // One line per logical line: the prefix of the long one, then "ok".
         assert_eq!(
             pieces,
             vec![
@@ -687,7 +593,6 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].as_str_lossy(), "done");
         assert_eq!(out[0].ending, LineEnding::Eof);
-        // A CR-only tail leaves nothing to emit.
         assert!(run_transform(&t, "a\n\r").len() == 1);
     }
 
@@ -695,13 +600,11 @@ mod tests {
     fn collapse_line_keeps_final_render() {
         assert_eq!(byte_out(CollapseLine::default(), "10%\r20%\r100%\n"), vec!["100%\n"]);
         assert_eq!(byte_out(CollapseLine::default(), "a\rbc\n"), vec!["bc\n"]);
-        // Longest write wins on the tail.
         assert_eq!(byte_out(CollapseLine::default(), "abc\rX\n"), vec!["Xbc\n"]);
     }
 
     #[test]
     fn utf8_lossy_replaces_and_reassembles() {
-        // A character split across two pushes is reassembled, not mangled.
         let mut f = Utf8Filter::default();
         let mut out = String::new();
         let smiley = "😀".as_bytes(); // F0 9F 98 80
@@ -711,7 +614,6 @@ mod tests {
         assert_eq!(out, "😀");
     }
 
-    // Reassemble raw output into one string.
     fn joined(transform: &Transform<Vec<u8>>, input: &str) -> String {
         run_transform(transform, input)
             .into_iter()
@@ -729,14 +631,12 @@ mod tests {
     #[test]
     fn ansi_keeps_attributes() {
         let t = Transform::builder().ansi(Ansi::StripNonAttribute).raw();
-        // SGR survives, the erase-line sequence does not.
         assert_eq!(joined(&t, "\x1b[31mred\x1b[0m\x1b[2K"), "\x1b[31mred\x1b[0m");
     }
 
     #[test]
     fn ansi_strips_escapes_with_intermediates() {
-        // Charset designations like `ESC ( B` (part of `tput sgr0` on most
-        // terminals) carry an intermediate byte; the final byte must not leak.
+        // `ESC ( B` (charset designator / part of tput sgr0) must not leak the final byte.
         let t = Transform::builder().ansi(Ansi::StripAll).raw();
         assert_eq!(joined(&t, "\x1b(Bhello\x1b)0!"), "hello!");
     }
@@ -744,15 +644,12 @@ mod tests {
     #[test]
     fn ansi_strips_osc_and_dcs_bodies() {
         let t = Transform::builder().ansi(Ansi::StripAll).raw();
-        // OSC title, terminated by BEL, leaves no body behind.
         assert_eq!(joined(&t, "a\x1b]0;title\x07b"), "ab");
-        // DCS body is consumed rather than leaked as text.
         assert_eq!(joined(&t, "a\x1bP1;2q body \x1b\\b"), "ab");
     }
 
     #[test]
     fn ansi_keeps_newlines() {
-        // C0 controls pass through so the line framer downstream still splits.
         let t = Transform::builder().ansi(Ansi::StripAll).raw();
         assert_eq!(joined(&t, "\x1b[31ma\nb\x1b[0m\n"), "a\nb\n");
     }
@@ -761,7 +658,6 @@ mod tests {
     fn ansi_handles_a_sequence_split_across_pushes() {
         let mut f = AnsiFilter::new(Ansi::StripAll);
         let mut out = String::new();
-        // The CSI sequence straddles the boundary between two feeds.
         f.push(b"a\x1b[3", &mut |b| out.push_str(&String::from_utf8_lossy(b)));
         f.push(b"1mb", &mut |b| out.push_str(&String::from_utf8_lossy(b)));
         f.flush(&mut |b| out.push_str(&String::from_utf8_lossy(b)));
@@ -788,8 +684,6 @@ mod tests {
 
     #[test]
     fn pipeline_applies_fixed_order_and_types_line() {
-        // A coloured progress bar: strip motion, collapse the rewrite, frame the
-        // line. The terminal framer sets the output type to Line.
         let t = Transform::builder()
             .ansi(Ansi::StripAll)
             .overwrite(Overwrite::CollapseLine)
@@ -802,8 +696,7 @@ mod tests {
 
     #[test]
     fn utf8_stage_runs_before_framing() {
-        // Invalid bytes are sanitized, then the line is framed. 0xff is not
-        // valid in a &str, so feed bytes through the pipeline directly.
+        // 0xff is not valid in a &str. Feed bytes directly.
         let t = Transform::builder().utf8(Utf8::Lossy).lines();
         let mut pipeline = t.build();
         let mut out = Vec::new();

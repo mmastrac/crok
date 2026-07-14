@@ -841,6 +841,7 @@ name = "procstream"
 version = "0.8.2"
 dependencies = [
  "libc",
+ "rustix",
  "tlhelp32",
  "vt-push-parser",
  "win32job",

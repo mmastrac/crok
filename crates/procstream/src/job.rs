@@ -18,14 +18,11 @@ use crate::capture::{Capture, DriverHandle, Event, Output};
 ///
 /// On Unix these map to `SIGINT`/`SIGTERM`/`SIGKILL`. On Windows there is no
 /// portable graceful signal for a job tree, so only [`Signal::Kill`] does
-/// anything (it terminates the Job); the others are a no-op.
+/// anything (it terminates the Job). The others are a no-op.
 #[derive(Copy, Clone, Debug)]
 pub enum Signal {
-    /// A polite interrupt (`SIGINT` on Unix).
     Interrupt,
-    /// A request to terminate (`SIGTERM` on Unix).
     Terminate,
-    /// An unconditional kill (`SIGKILL` on Unix; terminates the Job on Windows).
     Kill,
 }
 
@@ -71,10 +68,6 @@ impl CommandJobExt for Command {
         let pid = child.id();
         let exit = Arc::new(ExitState::default());
 
-        // With an inline driver the consumer's own `recv`/`wait` calls read the
-        // streams and reap the child, so no threads are spawned. On the thread
-        // backend, per-child reader threads plus a watcher own the work. Only
-        // the wiring differs; `Child` and `Output` are the same shape either way.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let (output, driver, readers, stdin) = {
             let (rx, streams, stdin, exit_tx) = capture.build_streams(&mut child);
@@ -91,14 +84,11 @@ impl CommandJobExt for Command {
         let (output, driver, readers, stdin) = {
             let (output, mut readers, stdin, tx) = capture.start(&mut child);
 
-            // The watcher owns the reap: the leader never lingers as a zombie,
-            // and its exit is published both as an [`Event::Exit`] on the queue
-            // and to `wait`/`try_wait` via the shared state.
             let watcher_exit = Arc::clone(&exit);
             readers.push(std::thread::spawn(move || {
                 let result = child.wait();
                 let status = result.as_ref().ok().copied();
-                // Store before sending, so a consumer that sees the event can
+                // Store before sending so a consumer that sees the event can
                 // immediately observe the status through `try_wait`.
                 watcher_exit.set(result);
                 if let Some(status) = status {
@@ -123,8 +113,7 @@ impl CommandJobExt for Command {
     }
 }
 
-/// The leader's reaped exit, shared between whoever reaps it (a watcher thread
-/// or the inline driver) and the `wait`/`try_wait` callers that read it.
+/// The leader's reaped exit, shared between whoever reaps it and `wait`/`try_wait`.
 #[derive(Default)]
 pub(crate) struct ExitState {
     status: Mutex<Option<Result<ExitStatus, Arc<io::Error>>>>,
@@ -142,8 +131,7 @@ impl ExitState {
         share_result(self.status.lock().unwrap().as_ref())
     }
 
-    // Only the thread backend blocks here; the driver backend drives
-    // `poll_once` to reach the exit instead.
+    // Thread backend only. The driver backend reaches exit via `poll_once`.
     fn wait(&self) -> io::Result<ExitStatus> {
         let mut guard = self.status.lock().unwrap();
         loop {
@@ -155,7 +143,6 @@ impl ExitState {
     }
 }
 
-// Clone a stored exit result out to a caller, rewrapping the shared error.
 fn share_result(
     stored: Option<&Result<ExitStatus, Arc<io::Error>>>,
 ) -> io::Result<Option<ExitStatus>> {
@@ -175,24 +162,19 @@ pub struct Job {
 
 #[cfg(unix)]
 struct JobInner {
-    /// The process group id, which equals the leader child's pid.
     pgid: i32,
-    /// Set once we deliver a terminate or kill signal to the tree.
     terminated: AtomicBool,
 }
 
 #[cfg(windows)]
 struct JobInner {
-    /// The Job object. Dropping it terminates the tree via kill-on-close, so it
-    /// also serves as the on-demand kill.
+    /// Dropping terminates the tree via kill-on-close.
     job: std::sync::Mutex<Option<win32job::Job>>,
-    /// Set once we terminate the tree.
     terminated: AtomicBool,
 }
 
 impl Job {
-    /// Whether procstream has delivered a terminate or kill signal to this
-    /// tree.
+    /// Whether procstream has delivered a terminate or kill signal to this tree.
     pub fn terminated(&self) -> bool {
         self.inner.terminated.load(Ordering::Relaxed)
     }
@@ -228,25 +210,15 @@ impl Job {
         }
     }
 
-    /// Escalating tree shutdown for contexts that only hold a [`Job`] clone:
-    /// send `sig`, wait up to `grace` for the tree to die, then `SIGKILL`
-    /// anything still alive.
-    ///
-    /// The early return depends on the group emptying, which needs the leader
-    /// reaped. On the thread backend the watcher reaps it as it exits. On the
-    /// driver backend the owning `Child` reaps it, so a caller that is not
-    /// draining that `Child` may not see the group empty until the grace ends
-    /// (a zombie leader still answers `kill(0)`). Correctness holds either way;
-    /// only the early-return latency differs. See the zombie-aware probe in
-    /// PLAN.md.
+    /// Send `sig`, wait up to `grace` for the tree to die, then `SIGKILL`
+    /// anything still alive. For contexts that only hold a [`Job`] clone.
     pub fn shutdown(&self, sig: Signal, grace: Duration) -> io::Result<()> {
         self.signal(sig)?;
 
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
-            // Probe with the null signal: once the group is gone there is
-            // nothing left to escalate against.
+            // Null signal: once the group is gone there is nothing to escalate.
             if unsafe { libc::kill(-(self.inner.pgid as libc::pid_t), 0) } != 0 {
                 return Ok(());
             }
@@ -272,17 +244,14 @@ impl Job {
             }
         }
 
-        // Create a new Job object
         let job = W::create().map_err(map_job_error)?;
 
-        // Configure the job to terminate all child processes when the job is closed
         let mut info = job.query_extended_limit_info().map_err(map_job_error)?;
         info.limit_kill_on_job_close();
         job.set_extended_limit_info(&info).map_err(map_job_error)?;
         job.assign_process(child.as_raw_handle() as _)
             .map_err(map_job_error)?;
 
-        // Resume the main thread for the process
         let id = child.id();
         for thread_entry in tlhelp32::Snapshot::new_thread()? {
             if thread_entry.owner_process_id == id {
@@ -308,15 +277,13 @@ impl Job {
         })
     }
 
-    /// Send `sig` to the tree. Only [`Signal::Kill`] does anything on Windows:
-    /// it terminates the Job (and with it every process). Graceful signals are
-    /// a no-op, so escalate to `Kill`.
+    /// Only [`Signal::Kill`] does anything on Windows: it terminates the Job.
+    /// Graceful signals are a no-op, so escalate to `Kill`.
     pub fn signal(&self, sig: Signal) -> io::Result<()> {
         if let Signal::Kill = sig {
             self.inner.terminated.store(true, Ordering::Relaxed);
             if let Some(job) = self.inner.job.lock().unwrap().take() {
-                // Terminate synchronously with a non-zero code. Kill-on-job-close
-                // (via the handle drop) exits the processes with code 0, which
+                // Kill-on-job-close (handle drop) exits with code 0, which
                 // reads as clean success and hides the kill.
                 use windows_sys::Win32::System::JobObjects::TerminateJobObject;
                 unsafe { TerminateJobObject(job.handle() as _, 1) };
@@ -325,8 +292,6 @@ impl Job {
         Ok(())
     }
 
-    /// Escalating tree shutdown for contexts that only hold a [`Job`] clone.
-    ///
     /// Graceful signals are undeliverable on Windows, so rather than burning a
     /// grace period nothing observed, this terminates the Job immediately.
     pub fn shutdown(&self, _sig: Signal, _grace: Duration) -> io::Result<()> {
@@ -334,56 +299,45 @@ impl Job {
     }
 }
 
-/// A spawned, isolated child process. Its captured output arrives on the
-/// [`Output`] queue returned alongside it by
-/// [`spawn_job`](CommandJobExt::spawn_job).
+/// A spawned, isolated child process. Captured output arrives on the [`Output`]
+/// returned by [`spawn_job`](CommandJobExt::spawn_job).
 pub struct Child {
     pid: u32,
     job: Job,
     exit: Arc<ExitState>,
     stdin: Option<std::process::ChildStdin>,
-    /// The inline driver, advanced by `wait`/`try_wait`/`shutdown`. `None` on
-    /// the thread backend, which reaps through the watcher instead.
+    /// `None` on the thread backend.
     driver: DriverHandle,
-    /// The reader and watcher threads to join at exit. Empty on the driver
-    /// backend, which has none.
+    /// Empty on the driver backend.
     readers: Vec<JoinHandle<()>>,
 }
 
 impl Child {
-    /// The immediate child's process id.
     pub fn id(&self) -> u32 {
         self.pid
     }
 
-    /// The isolation job for the whole tree. Clone it for a handle that can
-    /// signal the tree from another thread.
+    /// The isolation job for the whole tree. Clone it to signal from another thread.
     pub fn job(&self) -> &Job {
         &self.job
     }
 
-    /// Send `sig` to the whole tree without waiting. Equivalent to
-    /// `self.job().signal(sig)`.
+    /// Send `sig` to the whole tree without waiting.
     pub fn signal(&self, sig: Signal) -> io::Result<()> {
         self.job.signal(sig)
     }
 
-    /// Whether procstream terminated the tree. See [`Job::terminated`].
     pub fn terminated(&self) -> bool {
         self.job.terminated()
     }
 
-    /// Take the child's stdin handle, if stdin was piped.
     pub fn stdin(&mut self) -> Option<std::process::ChildStdin> {
         self.stdin.take()
     }
 
-    /// Check whether the child has exited without blocking.
     pub fn try_wait(&self) -> io::Result<Option<ExitStatus>> {
-        // Advance the driver once without blocking, then read the exit. Skip if
-        // another thread holds the driver: it is already advancing it, and a
-        // blocking recv could hold the lock for a while, which must not stall a
-        // non-blocking try_wait.
+        // Skip if another thread holds the driver: a blocking recv must not
+        // stall a non-blocking try_wait.
         if let Some(driver) = &self.driver
             && let Ok(mut driver) = driver.try_lock()
         {
@@ -392,19 +346,16 @@ impl Child {
         self.exit.get()
     }
 
-    /// Wait for the child to exit.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        // Close our end of stdin first (as std's `wait` does) so a child
-        // reading stdin to EOF exits rather than deadlocking against us.
+        // As std's `wait`: close stdin so a child reading to EOF can exit.
         drop(self.stdin.take());
         let status = self.await_exit()?;
         self.join_readers();
         Ok(status)
     }
 
-    // Block until the exit is known. On the driver backend that means driving
-    // the driver (which also drains the streams, so a full pipe cannot deadlock
-    // the wait); on the thread backend the watcher sets the exit for us.
+    // Driver backend: drive (and drain streams) until exit. Thread backend:
+    // the watcher publishes the exit.
     fn await_exit(&self) -> io::Result<ExitStatus> {
         let Some(driver) = &self.driver else {
             return self.exit.wait();
@@ -417,21 +368,17 @@ impl Child {
         }
     }
 
-    /// Convenience escalation: send `sig`, wait up to `grace` for the leader
-    /// to exit, then `SIGKILL` anything still alive in the tree, and reap.
+    /// Send `sig`, wait up to `grace` for the leader to exit, then `SIGKILL`
+    /// anything still alive in the tree, and reap.
     ///
     /// The kill is sent even when the leader exits within the grace period:
     /// descendants that outlive it would otherwise hold the output pipes open
     /// and stall the drain indefinitely.
-    ///
-    /// For finer control (your own deadlines, back-off, or signal sequence),
-    /// drive [`Child::signal`] and [`Child::try_wait`] directly instead.
     pub fn shutdown(&mut self, sig: Signal, grace: Duration) -> io::Result<ExitStatus> {
         drop(self.stdin.take());
         self.signal(sig)?;
 
-        // Graceful signals are undeliverable on Windows (see [`Job::signal`]),
-        // so don't burn a grace period nothing observed.
+        // Graceful signals are a no-op on Windows. Don't burn a grace period.
         let grace = if cfg!(windows) && !matches!(sig, Signal::Kill) {
             Duration::ZERO
         } else {
@@ -449,9 +396,8 @@ impl Child {
             std::thread::sleep(Duration::from_millis(10));
         };
 
-        // Kill whatever remains, whether or not the leader exited in time. If
-        // it is still running the group id is provably ours. Once the leader is
-        // reaped the reuse window is a two-syscall gap, not the grace.
+        // Always kill the tree: while the leader runs the pgid is ours. After
+        // it is reaped the reuse window is a two-syscall gap, not the grace.
         _ = self.signal(Signal::Kill);
 
         let status = match status {
@@ -501,8 +447,6 @@ mod tests {
         let mut exit = None;
         for event in output.iter() {
             if let Event::Exit(status) = event {
-                // The status is observable through try_wait as soon as the
-                // event is seen.
                 assert!(child.try_wait().unwrap().is_some());
                 exit = Some(status);
             }
@@ -517,7 +461,6 @@ mod tests {
         let (mut child, _output) = cmd.spawn_job(Capture::raw()).unwrap();
 
         child.signal(Signal::Kill).unwrap();
-        // The child must die promptly rather than sleeping for 30s.
         let start = Instant::now();
         let status = child.wait().unwrap();
         assert!(start.elapsed() < Duration::from_secs(5));
@@ -526,7 +469,6 @@ mod tests {
 
     #[test]
     fn shutdown_reaps_a_child_that_ignores_sigterm() {
-        // Trap SIGTERM so only the escalating SIGKILL can bring it down.
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("trap '' TERM; sleep 30");
         let (mut child, _output) = cmd.spawn_job(Capture::raw()).unwrap();
@@ -541,15 +483,12 @@ mod tests {
 
     #[test]
     fn shutdown_kills_descendants_that_outlive_the_leader() {
-        // The leader exits immediately but leaves behind a TERM-ignoring
-        // grandchild holding the output pipe; shutdown must SIGKILL the group
-        // rather than hang draining the readers.
+        // Leader exits immediately. TERM-ignoring grandchild holds the pipe.
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("trap '' TERM; sleep 30 & echo go; exit 0");
         let (mut child, output) = cmd.spawn_job(Capture::raw()).unwrap();
 
-        // Wait for the echo so the trap is installed (and the leader is about
-        // to exit) before we start signalling.
+        // Wait for the echo so the trap is installed before signalling.
         assert!(output.recv().is_some());
 
         let start = Instant::now();
@@ -562,8 +501,7 @@ mod tests {
 
     #[test]
     fn wait_closes_piped_stdin() {
-        // `cat` reads stdin to EOF; wait() must close our end of the pipe
-        // rather than deadlock against a child waiting for input.
+        // `cat` reads stdin to EOF. Wait must close our end or deadlock.
         let mut cmd = Command::new("cat");
         let (mut child, _output) = cmd
             .spawn_job(
@@ -585,8 +523,6 @@ mod tests {
         cmd.arg("-c").arg("sleep 30");
         let (mut child, output) = cmd.spawn_job(Capture::raw()).unwrap();
 
-        // A quiet child yields nothing, so the call must report Timeout rather
-        // than block. This also exercises the driver's huge-deadline clamp.
         let start = Instant::now();
         assert!(matches!(
             output.recv_timeout(Duration::from_millis(50)),
@@ -595,7 +531,6 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(5));
 
         child.signal(Signal::Kill).unwrap();
-        // The exit drains and the queue then closes.
         loop {
             match output.recv_timeout(Duration::from_secs(5)) {
                 Ok(_) => {}
@@ -625,10 +560,8 @@ mod tests {
         let (mut child, output) = cmd.spawn_job(Capture::raw()).unwrap();
         let job = child.job().clone();
 
-        // Drain in the background so the leader is reaped as it dies (on the
-        // driver backend that reap only happens while the child is driven; on
-        // the thread backend the watcher does it). The liveness probe then sees
-        // the group vanish and returns without burning the grace.
+        // Drain so the leader is reaped (driver only reaps while driven) and
+        // the liveness probe can see the group vanish.
         let start = Instant::now();
         std::thread::scope(|s| {
             s.spawn(move || output.iter().for_each(drop));
