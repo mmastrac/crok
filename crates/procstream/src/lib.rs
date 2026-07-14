@@ -2,6 +2,12 @@
 
 mod capture;
 mod job;
+// The inline capture driver and its readiness poller need kqueue or epoll, so
+// they are unavailable on other platforms, which fall back to reader threads.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod driver;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod poller;
 mod transform;
 
 pub use capture::{Capture, CaptureBuilder, Chunk, Event, Output, RecvTimeout, Sink, Stdin, Stream};
