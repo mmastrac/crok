@@ -1,0 +1,27 @@
+Running <root>/partial_line_match.cli ...
+
+printf "Line 1\n000000010004c3f0 S _ctor_ap_1_0_9\nLine 2\n"
+---
+Line 1
+000000010004c3f0 S _ctor_ap_1_0_9
+Line 2
+---
+✅ OK
+
+printf "Line 1\n000000010004c3f0 S _ctor_ap_1_0_9\nLine 2\n"
+---
+Line 1
+000000010004c3f0 S _ctor_ap_1_0_9
+Line 2
+---
+✅ OK
+
+printf "Line 1\n000000010004c3f0 S _ctor_ap_1_0_9\nLine 2\n"
+---
+Line 1
+000000010004c3f0 S _ctor_ap_1_0_9
+Line 2
+---
+✅ OK
+
+<root>/partial_line_match.cli PASSED

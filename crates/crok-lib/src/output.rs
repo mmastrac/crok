@@ -559,6 +559,8 @@ impl GrokPattern {
         let mut test_pattern = String::new();
         let mut final_pattern = String::new();
         let mut aliases = vec![];
+        test_pattern.push('^');
+        final_pattern.push('^');
         for bit in grok::parser::grok_split(line) {
             match bit {
                 grok::parser::GrokComponent::RegularExpression { string, .. } => {
@@ -602,8 +604,10 @@ impl GrokPattern {
             }
         }
 
-        test_pattern.push('$');
-        final_pattern.push('$');
+        if !final_pattern.ends_with('$') {
+            test_pattern.push('$');
+            final_pattern.push('$');
+        }
 
         _ = Grok::empty()
             .compile(&test_pattern, false)

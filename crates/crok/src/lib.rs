@@ -115,10 +115,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cprintln!(fg = Color::Red, " {e}");
             }
             cprintln!();
-            cprintln!(
-                dimmed = true,
-                "Run `crok --help-syntax` for syntax help."
-            );
+            cprintln!(dimmed = true, "Run `crok --help-syntax` for syntax help.");
             std::process::exit(1);
         }
     };

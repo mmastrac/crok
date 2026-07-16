@@ -1,0 +1,21 @@
+#!/usr/bin/env crok --v0
+
+# This is only a partial line match: it should not actually match
+
+$ printf "Line 1\n000000010004c3f0 S _ctor_ap_1_0_9\nLine 2\n"
+%EXPECT_FAILURE
+*
+! _ctor_ap_%{DATA}
+*
+
+$ printf "Line 1\n000000010004c3f0 S _ctor_ap_1_0_9\nLine 2\n"
+%EXPECT_FAILURE
+*
+? _ctor_ap_%{DATA}
+*
+
+$ printf "Line 1\n000000010004c3f0 S _ctor_ap_1_0_9\nLine 2\n"
+%EXPECT_FAILURE
+*
+! _ctor_ap_1_0_9
+*
