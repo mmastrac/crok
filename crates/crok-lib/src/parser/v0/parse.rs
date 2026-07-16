@@ -485,9 +485,9 @@ fn parse_pattern_line(
         })
     } else if line_start == '?' {
         let text = if text.ends_with('$') {
-            format!(r#"^{text}"#)
+            text.to_string()
         } else {
-            format!(r#"^{text}\s*$"#)
+            format!(r#"{text}\s*"#)
         };
         let pattern = GrokPattern::compile(&text, original, false).map_err(|e| {
             ScriptError::new_with_data(

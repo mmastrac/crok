@@ -735,9 +735,7 @@ pub enum ScriptErrorType {
     InvalidExitStatus,
     #[error("invalid set variable")]
     InvalidSetVariable,
-    #[error(
-        "invalid version header, expected `#!/usr/bin/env crok --v0`"
-    )]
+    #[error("invalid version header, expected `#!/usr/bin/env crok --v0`")]
     InvalidVersion,
     #[error("invalid internal command")]
     InvalidInternalCommand,
