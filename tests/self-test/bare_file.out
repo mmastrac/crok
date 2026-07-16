@@ -8,9 +8,9 @@ printf "Hello, World!\n"
 ─────────────────────────────────────────────┨ ./data/hello_world.crok:2 ┣━━
 Hello, World!
 ──────────────────────────────────────────────────────────────────────────────
-✅ OK (0.01s)
+✅ OK (%{DATA})
 
-./data/hello_world.crok PASSED (0.01s)
+./data/hello_world.crok PASSED (%{DATA})
 1 test(s) passed
 ---
 ✅ OK
@@ -25,9 +25,9 @@ printf "Hello, World!\n"
 ──────────────────────────────────────────────────┨ ./hello_world.crok:2 ┣━━
 Hello, World!
 ──────────────────────────────────────────────────────────────────────────────
-✅ OK (0.01s)
+✅ OK (%{DATA})
 
-./hello_world.crok PASSED (0.01s)
+./hello_world.crok PASSED (%{DATA})
 1 test(s) passed
 ---
 ✅ OK
